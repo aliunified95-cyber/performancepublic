@@ -594,7 +594,7 @@
         <button class="filter-btn" data-range="today">Today</button>
         <button class="filter-btn" data-range="yesterday">Yesterday</button>
         <button class="filter-btn" data-range="week">This Week</button>
-        <button class="filter-btn active" data-range="month">This Month</button>
+        <button class="filter-btn" data-range="month">This Month</button>
         <button class="filter-btn" data-range="mtd">MTD</button>
         <button class="filter-btn" data-range="quarter">Quarter</button>
         <button class="filter-btn" data-range="annual">Annual</button>
@@ -747,7 +747,7 @@
     const isLive = !!(lsData && lsData.agents && lsData.agents.length);
 
     // ─── STATE ───────────────────────────────────────────────────────────────
-    let currentRange    = 'month';
+    let currentRange    = isLive ? 'annual' : 'month';
     let customDateFrom  = null;
     let customDateTo    = null;
     let searchQuery     = '';
@@ -903,6 +903,16 @@
 
       document.getElementById('tableCount').textContent = `Showing ${paged.length} of ${total} agent${total!==1?'s':''}`;
 
+      if (paged.length === 0) {
+        let msg = 'No agents match the current filters.';
+        if (isLive && lsData.summary && (currentRange !== 'custom' || (customDateFrom && customDateTo))) {
+          msg = `No orders found for this period.<br><span style="font-size:12px;opacity:.65">Your imported data covers <strong>${lsData.summary.dateFrom}</strong> – <strong>${lsData.summary.dateTo}</strong>. Try selecting a different date range.</span>`;
+        }
+        document.getElementById('agentBody').innerHTML = `
+          <tr><td colspan="8" style="text-align:center;padding:40px 20px;color:var(--text-dim);font-size:14px;">${msg}</td></tr>`;
+        return;
+      }
+
       document.getElementById('agentBody').innerHTML = paged.map(a => {
         const rate = a.total > 0 ? Math.round((a.claimed/a.total)*100) : 0;
         const statusMap = { active:'pill-active Active', away:'pill-away Away', offline:'pill-offline Offline' };
@@ -1011,6 +1021,11 @@
     const mo  = String(now.getMonth()+1).padStart(2,'0');
     document.getElementById('dateFrom').value = `${y}-${mo}-01`;
     document.getElementById('dateTo').value   = now.toISOString().slice(0,10);
+
+    // Sync active filter button to initial range
+    document.querySelectorAll('.filter-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.range === currentRange);
+    });
 
     render();
   </script>
