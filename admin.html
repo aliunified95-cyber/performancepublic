@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin — Data Management</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --mint:      #D8F5EC;
+      --emerald:   #2ECC8A;
+      --amethyst:  #7B3FA0;
+      --evergreen: #1B3A2D;
+      --card-bg:   rgba(27, 58, 45, 0.65);
+      --border:    rgba(216, 245, 236, 0.1);
+      --text-dim:  rgba(216, 245, 236, 0.45);
+      --text-mid:  rgba(216, 245, 236, 0.72);
+    }
+
+    body {
+      min-height: 100vh;
+      background: var(--evergreen);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      color: var(--mint);
+    }
+
+    /* ── NAV ── */
+    nav {
+      background: rgba(13, 26, 19, 0.92);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(12px);
+      position: sticky; top: 0; z-index: 200;
+      height: 60px; padding: 0 32px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .nav-logo-icon {
+      width: 34px; height: 34px; background: var(--amethyst);
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    }
+    .nav-logo-icon svg { width: 18px; height: 18px; stroke: #fff; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .nav-logo-text { font-size: 15px; font-weight: 700; color: var(--mint); }
+    .nav-links { display: flex; gap: 4px; }
+    .nav-link {
+      padding: 6px 14px; border-radius: 8px; font-size: 13px;
+      color: var(--text-mid); text-decoration: none; font-weight: 500;
+      transition: background 0.15s, color 0.15s;
+    }
+    .nav-link:hover    { background: rgba(216,245,236,0.07); color: var(--mint); }
+    .nav-link.active   { background: var(--amethyst); color: #fff; }
+    .nav-avatar {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: var(--amethyst); display: flex; align-items: center;
+      justify-content: center; font-size: 13px; font-weight: 700; color: #fff;
+    }
+
+    /* ── PAGE ── */
+    .page { max-width: 1100px; margin: 0 auto; padding: 36px 24px 60px; }
+    .page-head { margin-bottom: 32px; }
+    .page-head h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
+    .page-head p  { font-size: 13px; color: var(--text-dim); margin-top: 5px; }
+
+    /* ── STEP INDICATOR ── */
+    .steps {
+      display: flex; align-items: center; gap: 0;
+      margin-bottom: 36px; padding: 20px 28px;
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 16px;
+    }
+    .step { display: flex; align-items: center; flex: 1; }
+    .step-circle {
+      width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700;
+      border: 2px solid rgba(216,245,236,0.15);
+      color: var(--text-dim); transition: all 0.3s;
+    }
+    .step-info { margin-left: 10px; }
+    .step-label { font-size: 13px; font-weight: 600; color: var(--text-dim); transition: color 0.3s; }
+    .step-sub   { font-size: 11px; color: var(--text-dim); margin-top: 1px; opacity: 0.7; }
+    .step-line  { flex: 1; height: 1px; background: rgba(216,245,236,0.1); margin: 0 16px; max-width: 80px; }
+
+    .step.done .step-circle  { background: var(--emerald); border-color: var(--emerald); color: #fff; }
+    .step.done .step-label   { color: var(--mint); }
+    .step.active .step-circle { background: var(--amethyst); border-color: var(--amethyst); color: #fff; box-shadow: 0 0 0 4px rgba(123,63,160,0.25); }
+    .step.active .step-label  { color: var(--mint); }
+
+    /* ── UPLOAD CARD ── */
+    .upload-card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 20px; padding: 40px; backdrop-filter: blur(14px);
+      margin-bottom: 24px;
+    }
+    .drop-zone {
+      border: 2px dashed rgba(123,63,160,0.4);
+      border-radius: 14px;
+      padding: 52px 32px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+    .drop-zone:hover,
+    .drop-zone.drag-over {
+      border-color: var(--amethyst);
+      background: rgba(123,63,160,0.07);
+    }
+    .drop-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-icon {
+      width: 52px; height: 52px; border-radius: 14px;
+      background: rgba(123,63,160,0.15);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 16px;
+    }
+    .drop-icon svg { width: 26px; height: 26px; stroke: var(--amethyst); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .drop-title { font-size: 16px; font-weight: 600; color: var(--mint); margin-bottom: 6px; }
+    .drop-sub   { font-size: 13px; color: var(--text-dim); }
+    .drop-sub strong { color: var(--amethyst); }
+    .drop-formats { margin-top: 14px; display: flex; justify-content: center; gap: 8px; }
+    .fmt-tag {
+      font-size: 11px; font-weight: 600; padding: 3px 10px;
+      border-radius: 20px; border: 1px solid var(--border);
+      color: var(--text-mid); background: rgba(216,245,236,0.04);
+    }
+
+    /* File selected state */
+    .file-strip {
+      display: none;
+      align-items: center; gap: 14px;
+      background: rgba(46,204,138,0.08);
+      border: 1px solid rgba(46,204,138,0.2);
+      border-radius: 12px; padding: 14px 18px; margin-top: 16px;
+    }
+    .file-strip.show { display: flex; }
+    .file-strip-icon {
+      width: 38px; height: 38px; flex-shrink: 0; border-radius: 10px;
+      background: rgba(46,204,138,0.15);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .file-strip-icon svg { width: 18px; height: 18px; stroke: var(--emerald); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .file-strip-info { flex: 1; }
+    .file-strip-name { font-size: 13px; font-weight: 600; color: var(--mint); }
+    .file-strip-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    .file-strip-remove {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-dim); font-size: 18px; line-height: 1;
+      padding: 4px; transition: color 0.15s;
+    }
+    .file-strip-remove:hover { color: #ff8080; }
+
+    /* ── COLUMN VALIDATION ── */
+    #validationSection { display: none; margin-bottom: 24px; }
+    .section-card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 20px; padding: 28px 32px; backdrop-filter: blur(14px);
+    }
+    .section-card-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .section-card-title { font-size: 15px; font-weight: 700; color: var(--mint); }
+    .section-card-sub   { font-size: 12px; color: var(--text-dim); margin-top: 3px; }
+
+    .col-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+      gap: 10px;
+    }
+    .col-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px; border-radius: 10px;
+      border: 1px solid transparent;
+      font-size: 12px; font-weight: 500;
+    }
+    .col-item.found   { background: rgba(46,204,138,0.07);  border-color: rgba(46,204,138,0.2);  color: var(--mint); }
+    .col-item.missing { background: rgba(255,80,80,0.07);   border-color: rgba(255,80,80,0.2);   color: #ff9090; }
+    .col-item.warn    { background: rgba(255,193,7,0.07);   border-color: rgba(255,193,7,0.2);   color: #ffd060; }
+    .col-item-icon { font-size: 13px; flex-shrink: 0; }
+    .col-item-name { font-family: 'Courier New', monospace; font-size: 11px; }
+    .col-item-status { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+
+    .validation-summary {
+      display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;
+    }
+    .val-chip {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;
+    }
+    .val-chip-ok   { background: rgba(46,204,138,0.12); color: var(--emerald); }
+    .val-chip-err  { background: rgba(255,80,80,0.12);  color: #ff8080; }
+    .val-chip-warn { background: rgba(255,193,7,0.12);  color: #ffc107; }
+
+    /* ── DATA PREVIEW ── */
+    #previewSection { display: none; margin-bottom: 24px; }
+    .preview-table-wrap {
+      overflow-x: auto;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+    .preview-table { width: 100%; border-collapse: collapse; min-width: 900px; }
+    .preview-table th {
+      padding: 10px 14px; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.6px;
+      color: var(--text-dim); background: rgba(216,245,236,0.04);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .preview-table td {
+      padding: 10px 14px; font-size: 12px; color: var(--mint);
+      border-bottom: 1px solid rgba(216,245,236,0.04);
+      white-space: nowrap; max-width: 160px;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .preview-table tr:last-child td { border-bottom: none; }
+    .preview-table tr:hover td { background: rgba(216,245,236,0.02); }
+    .preview-more {
+      text-align: center; padding: 12px;
+      font-size: 12px; color: var(--text-dim);
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── IMPORT BUTTON ── */
+    #importSection { display: none; margin-bottom: 32px; }
+    .import-bar {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 16px; padding: 24px 28px;
+      display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+    }
+    .import-info { flex: 1; }
+    .import-info-title { font-size: 14px; font-weight: 700; color: var(--mint); }
+    .import-info-sub   { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+    .btn-import {
+      background: var(--amethyst); color: #fff;
+      border: none; border-radius: 10px;
+      padding: 12px 28px; font-size: 14px; font-weight: 600;
+      cursor: pointer; white-space: nowrap;
+      box-shadow: 0 4px 14px rgba(123,63,160,0.4);
+      transition: opacity 0.2s, transform 0.15s;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .btn-import:hover    { opacity: 0.9; transform: translateY(-1px); }
+    .btn-import:disabled { opacity: 0.5; cursor: default; transform: none; }
+    .btn-import svg { width: 16px; height: 16px; stroke: #fff; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .btn-spinner {
+      display: none; width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff; border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    .btn-import.loading .btn-icon    { display: none; }
+    .btn-import.loading .btn-spinner { display: block; }
+    .btn-import.loading .btn-label   { opacity: 0.7; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── SUCCESS BANNER ── */
+    #successSection { display: none; margin-bottom: 32px; }
+    .success-banner {
+      background: rgba(46,204,138,0.1);
+      border: 1px solid rgba(46,204,138,0.25);
+      border-radius: 16px; padding: 28px 32px;
+    }
+    .success-banner-head {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+    }
+    .success-banner-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: rgba(46,204,138,0.2);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .success-banner-icon svg { width: 20px; height: 20px; stroke: var(--emerald); fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    .success-banner-title { font-size: 16px; font-weight: 700; color: var(--mint); }
+    .success-banner-sub   { font-size: 12px; color: var(--text-dim); margin-top: 3px; }
+    .success-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px,1fr)); gap: 14px; }
+    .success-kpi {
+      background: rgba(27,58,45,0.7); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px 18px;
+    }
+    .success-kpi-val { font-size: 24px; font-weight: 800; color: var(--mint); letter-spacing: -0.5px; }
+    .success-kpi-lbl { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+    .success-actions { margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn-outline {
+      background: transparent; border: 1px solid rgba(216,245,236,0.2);
+      color: var(--mint); border-radius: 8px; padding: 9px 18px;
+      font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: none;
+      display: inline-flex; align-items: center; gap: 6px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-outline:hover { background: rgba(216,245,236,0.07); border-color: rgba(216,245,236,0.35); }
+    .btn-outline svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ── IMPORT HISTORY ── */
+    .history-list { display: flex; flex-direction: column; gap: 10px; }
+    .history-item {
+      display: flex; align-items: center; gap: 16px;
+      padding: 16px 18px; border-radius: 12px;
+      background: rgba(216,245,236,0.03); border: 1px solid var(--border);
+      transition: background 0.15s;
+    }
+    .history-item:hover { background: rgba(216,245,236,0.05); }
+    .history-icon {
+      width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+      background: rgba(123,63,160,0.15);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .history-icon svg { width: 16px; height: 16px; stroke: var(--amethyst); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .history-info { flex: 1; }
+    .history-name { font-size: 13px; font-weight: 600; color: var(--mint); }
+    .history-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    .history-badge {
+      font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 20px;
+      background: rgba(46,204,138,0.1); color: var(--emerald);
+    }
+    .history-del {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-dim); font-size: 16px;
+      padding: 4px; transition: color 0.15s; line-height: 1;
+    }
+    .history-del:hover { color: #ff8080; }
+    .empty-state {
+      text-align: center; padding: 36px 20px;
+      color: var(--text-dim); font-size: 13px;
+    }
+    .empty-state svg {
+      width: 36px; height: 36px; stroke: rgba(216,245,236,0.2);
+      fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+      margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto;
+    }
+
+    /* ── PROGRESS BAR ── */
+    .parse-progress { display: none; margin-top: 16px; }
+    .parse-progress.show { display: block; }
+    .progress-label { font-size: 12px; color: var(--text-mid); margin-bottom: 6px; }
+    .progress-track { height: 5px; background: rgba(216,245,236,0.08); border-radius: 3px; overflow: hidden; }
+    .progress-fill  { height: 100%; background: linear-gradient(90deg, var(--emerald), var(--amethyst)); border-radius: 3px; transition: width 0.3s ease; width: 0%; }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(216,245,236,0.15); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(216,245,236,0.25); }
+
+    @media (max-width: 640px) {
+      nav { padding: 0 16px; }
+      .nav-links { display: none; }
+      .page { padding: 20px 14px 40px; }
+      .upload-card { padding: 24px 16px; }
+      .section-card { padding: 20px 16px; }
+      .steps { padding: 16px; gap: 0; }
+      .step-info { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="login.html" class="nav-logo">
+    <div class="nav-logo-icon">
+      <svg viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
+    </div>
+    <span class="nav-logo-text">Team Performance</span>
+  </a>
+  <div class="nav-links">
+    <a href="agents-performance.html" class="nav-link">Sales Performance</a>
+    <a href="admin.html"              class="nav-link active">Admin</a>
+  </div>
+  <div class="nav-avatar">AM</div>
+</nav>
+
+<div class="page">
+
+  <!-- PAGE HEAD -->
+  <div class="page-head">
+    <h1>Data Management</h1>
+    <p>Upload and parse your CSV export to power all performance dashboards</p>
+  </div>
+
+  <!-- STEPS -->
+  <div class="steps" id="stepsBar">
+    <div class="step active" id="step1">
+      <div class="step-circle">1</div>
+      <div class="step-info">
+        <div class="step-label">Upload</div>
+        <div class="step-sub">Select CSV file</div>
+      </div>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" id="step2">
+      <div class="step-circle">2</div>
+      <div class="step-info">
+        <div class="step-label">Validate</div>
+        <div class="step-sub">Check columns</div>
+      </div>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" id="step3">
+      <div class="step-circle">3</div>
+      <div class="step-info">
+        <div class="step-label">Preview</div>
+        <div class="step-sub">Review data</div>
+      </div>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" id="step4">
+      <div class="step-circle">4</div>
+      <div class="step-info">
+        <div class="step-label">Import</div>
+        <div class="step-sub">Save & apply</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- UPLOAD CARD -->
+  <div class="upload-card">
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".csv,.tsv,.txt" />
+      <div class="drop-icon">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div class="drop-title">Drop your CSV file here</div>
+      <div class="drop-sub">or <strong>click to browse</strong> your files</div>
+      <div class="drop-formats">
+        <span class="fmt-tag">CSV</span>
+        <span class="fmt-tag">TSV</span>
+        <span class="fmt-tag">TXT</span>
+      </div>
+    </div>
+
+    <!-- File strip -->
+    <div class="file-strip" id="fileStrip">
+      <div class="file-strip-icon">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      </div>
+      <div class="file-strip-info">
+        <div class="file-strip-name" id="fileName">—</div>
+        <div class="file-strip-meta" id="fileMeta">—</div>
+      </div>
+      <button class="file-strip-remove" id="removeFile" title="Remove file">×</button>
+    </div>
+
+    <!-- Parse progress -->
+    <div class="parse-progress" id="parseProgress">
+      <div class="progress-label" id="progressLabel">Parsing file…</div>
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    </div>
+  </div>
+
+  <!-- VALIDATION -->
+  <div id="validationSection">
+    <div class="section-card">
+      <div class="section-card-head">
+        <div>
+          <div class="section-card-title">Column Validation</div>
+          <div class="section-card-sub">Checking for required columns in the uploaded file</div>
+        </div>
+        <div class="validation-summary" id="valSummary"></div>
+      </div>
+      <div class="col-grid" id="colGrid"></div>
+    </div>
+  </div>
+
+  <!-- PREVIEW -->
+  <div id="previewSection">
+    <div class="section-card">
+      <div class="section-card-head">
+        <div>
+          <div class="section-card-title">Data Preview</div>
+          <div class="section-card-sub" id="previewSub">Showing first 10 rows · active columns only</div>
+        </div>
+      </div>
+      <div class="preview-table-wrap">
+        <table class="preview-table">
+          <thead id="previewHead"></thead>
+          <tbody id="previewBody"></tbody>
+        </table>
+        <div class="preview-more" id="previewMore"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT -->
+  <div id="importSection">
+    <div class="import-bar">
+      <div class="import-info">
+        <div class="import-info-title" id="importTitle">Ready to import</div>
+        <div class="import-info-sub"   id="importSub">Data will be saved and applied to all dashboards immediately.</div>
+      </div>
+      <button class="btn-import" id="importBtn">
+        <svg class="btn-icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <div class="btn-spinner"></div>
+        <span class="btn-label">Import Data</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- SUCCESS -->
+  <div id="successSection">
+    <div class="success-banner">
+      <div class="success-banner-head">
+        <div class="success-banner-icon">
+          <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div>
+          <div class="success-banner-title">Import Successful</div>
+          <div class="success-banner-sub" id="successSub">Dashboards are now powered by your data.</div>
+        </div>
+      </div>
+      <div class="success-kpis" id="successKpis"></div>
+      <div class="success-actions">
+        <a href="agents-performance.html" class="btn-outline">
+          <svg viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
+          View Sales Performance
+        </a>
+        <button class="btn-outline" id="newImportBtn">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Import Another File
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT HISTORY -->
+  <div class="section-card">
+    <div class="section-card-head">
+      <div>
+        <div class="section-card-title">Import History</div>
+        <div class="section-card-sub">Previous data imports — click to restore</div>
+      </div>
+      <button class="btn-outline" id="clearHistoryBtn" style="font-size:12px;padding:6px 14px;">Clear All</button>
+    </div>
+    <div class="history-list" id="historyList"></div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// COLUMN DEFINITIONS
+// ─────────────────────────────────────────────────────────────────────────────
+const ACTIVE_COLS = [
+  'ORDER_CREATION_DATE',
+  'ORDER_CREATION_time',
+  'HOURS_TYPE',
+  'CHANNEL_ORDER_NO',
+  'CHANNEL',
+  'ESHOP_ORDER_STATUS',
+  'DEVICE_STATUS_REASON1',
+  'DEVICE_SERVICE1',
+  'PLAN_STATUS_REASON1',
+  'NEW_EXISTING_FLAG1',
+  'PLAN_PACKAGE1',
+  'SALES_CLAIM_DATE_FIRST',
+  'SALES_CLAIM_TIME_FIRST',
+  'SALES_USER_FIRST',
+  'LOGISTICS_ASSIGN_DATE_1',
+  'LOGISTICS_ASSIGN_TIME_1',
+];
+
+const ALL_COLS = [
+  'ORDER_CREATION_DATE','ORDER_CREATION_time','HOURS_TYPE','ORDER_CREATION_DATE_TIME1',
+  'CHANNEL_ORDER_NO','LOG_USER','CHANNEL','REMEDY_REFERENCE','ID_NO','CONT_CATEGORY',
+  'DELIVERY_METHOD','HIR_STATUS','ESHOP_ORDER_STATUS','APPROVED_ORDER_TYPE',
+  'DEVICE_STATUS_REASON1','DEVICE_SERVICE1','DEVICE_STATUS_REASON2','DEVICE_SERVICE2',
+  'DEVICE_STATUS_REASON3','DEVICE_SERVICE3','PLAN_STATUS_REASON1','NEW_EXISTING_FLAG1',
+  'PLAN_PACKAGE1','PLAN_STATUS_REASON2','NEW_EXISTING_FLAG2','PLAN_PACKAGE2',
+  'PLAN_STATUS_REASON3','NEW_EXISTING_FLAG3','PLAN_PACKAGE3','ACTION_DATE_TIME',
+  'ACTION_DATE','ACTION_TIME','SALESMAN_ID','SALES_GROUP','SALES_CLAIM_DATE_FIRST',
+  'SALES_CLAIM_TIME_FIRST','SALES_USER_FIRST','SALES_CLAIM_DATE_LAST',
+  'SALES_CLAIM_TIME_LAST','SALES_USER_LAST','SALES_DUR_CLM_ASSIGN',
+  'SALES_DUR_CREATION_CLAIM','SALES_DUR_ACTION_ASSIGN','SALES_DUR_CREATION_ASSIGN',
+  'LOGISTICS_ASSIGN_DATE_1','LOGISTICS_ASSIGN_TIME_1','LOGISTICS_ASSIGN_DATE',
+  'LOGISTICS_ASSIGN_TIME','LOGISTICS_GROUP','LOGISTICS_CLAIM_DATE_FIRST',
+  'LOGISTICS_CLAIM_TIME_FIRST','LOGISTICS_USER_FIRST','LOGISTICS_CLAIM_DATE_LAST',
+  'LOGISTICS_CLAIM_TIME_LAST','LOGISTICS_USER_LAST','LOGISTICS_LOGGED_DEVICE1',
+  'LOGISTICS_LOGGED_DEVICE2','LOGISTICS_LOGGED_DEVICE3','LOGISTICS_LOGGED_PLAN1',
+  'LOGISTICS_LOGGED_PLAN2','LOGISTICS_LOGGED_PLAN3','LOGISTICS_DUR_CLM_ASSIGN',
+  'LOGISTICS_DUR_ASSIGN_ASSING','DELIVERY_ASSIGN_DATE','DELIVERY_ASSIGN_TIME',
+  'DELIVERY_GROUP','DELIVERY_USER','DELIVERY_ASSIGN_DATE_LAST','DELIVERY_ASSIGN_TIME_LAST',
+  'DELIVERY_USER_LAST','DELIVERY_TIME','DELIVERY_STATUS','DELIVERY_DUR_ASSIGN_ASSIGN',
+  'DUR_ASSIGN_LOGIST_ASSIGN_ACT','ACTIVATION_ASSIGN_DATE','ACTIVATION_ASSIGN_TIME',
+  'ACTIVATION_GROUP','ACTIVATION_CLAIM_DATE','ACTIVATION_CLAIM_TIME','ACTIVATION_USER',
+  'TABS_ACTION_DATETIME_ID','TABS_ACTION_USER_ID','TABS_ACTION_DATETIME_SERIAL',
+  'TABS_ACTION_USER_SERIAL','TABS_DEVICE_DETAILS','TABS_PLAN_DETAILS','COMPLETE_DATE',
+  'COMPLETE_TIME','COMPLETE_USER','ACTIVATION_DUR_CLM_TABS','ACTIVATION_DUR_CLM_COMPLETE',
+  'ACTIVATION_DUR_ASSIGN_TABS','ACTIVATION_DUR_ASSIGN_COMPLETE','DUR_CREATE_TABS',
+  'DUR_CREATE_COMPLETE','ORDER_HANDLER_GROUP','ORDER_HANDLER','CRM_ORDER_STATUS',
+  'REJECTION_REASON','REJECTION_CATEGORY','DRIVER_NOTE','DELIVERY_SLOT',
+  'Delivery_Accuracy','COUPON_CODES','cust_address','AUTH_CODE','PAYMENT_METHOD','AMOUNT_RECEIVED',
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────────────────────────────────────
+let parsedHeaders = [];
+let parsedRows    = [];
+let currentFile   = null;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSV PARSER (handles quoted fields, auto-detects delimiter)
+// ─────────────────────────────────────────────────────────────────────────────
+function detectDelimiter(sample) {
+  const counts = { ',': 0, '\t': 0, ';': 0, '|': 0 };
+  for (const c of sample) if (c in counts) counts[c]++;
+  return Object.entries(counts).sort((a,b) => b[1]-a[1])[0][0];
+}
+
+function parseCSV(text) {
+  const lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').filter(l => l.trim());
+  if (!lines.length) return { headers: [], rows: [] };
+
+  const delim    = detectDelimiter(lines[0]);
+  const parseRow = (line) => {
+    const fields = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+        else { inQ = !inQ; }
+      } else if (ch === delim && !inQ) {
+        fields.push(cur.trim()); cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    fields.push(cur.trim());
+    return fields;
+  };
+
+  const headers = parseRow(lines[0]).map(h => h.replace(/^\ufeff/, '').trim()); // strip BOM
+  const rows    = [];
+  for (let i = 1; i < lines.length; i++) {
+    const vals = parseRow(lines[i]);
+    if (vals.every(v => !v)) continue; // skip blank rows
+    const row = {};
+    headers.forEach((h, idx) => { row[h] = vals[idx] ?? ''; });
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATE / TIME HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+function parseDateTime(dateStr, timeStr) {
+  if (!dateStr) return null;
+  dateStr = dateStr.trim(); timeStr = (timeStr || '').trim();
+
+  // Try ISO first
+  let d = new Date(`${dateStr}T${timeStr || '00:00:00'}`);
+  if (!isNaN(d)) return d;
+
+  // Try DD/MM/YYYY or MM/DD/YYYY
+  const parts = dateStr.split(/[\/\-\.]/);
+  if (parts.length === 3) {
+    let [a, b, c] = parts.map(Number);
+    // Heuristic: if first part > 12, it's DD/MM/YYYY
+    let iso;
+    if (a > 12) iso = `${c < 100 ? 2000+c : c}-${String(b).padStart(2,'0')}-${String(a).padStart(2,'0')}`;
+    else        iso = `${c < 100 ? 2000+c : c}-${String(a).padStart(2,'0')}-${String(b).padStart(2,'0')}`;
+    d = new Date(`${iso}T${timeStr || '00:00:00'}`);
+    if (!isNaN(d)) return d;
+  }
+  return null;
+}
+
+function diffSeconds(dtA, dtB) {
+  if (!dtA || !dtB) return null;
+  const diff = (dtB - dtA) / 1000;
+  return diff >= 0 ? diff : null; // ignore negative diffs (data issues)
+}
+
+function fmtTime(sec) {
+  if (sec == null || isNaN(sec)) return '—';
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return `${m}m ${String(s).padStart(2,'0')}s`;
+}
+
+function avg(arr) {
+  const valid = arr.filter(v => v != null && !isNaN(v));
+  if (!valid.length) return null;
+  return valid.reduce((s,v) => s+v, 0) / valid.length;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROCESS RAW ROWS → AGENT DATA
+// ─────────────────────────────────────────────────────────────────────────────
+function processRows(rows) {
+  const agentMap = {};
+
+  rows.forEach(row => {
+    const agent = (row['SALES_USER_FIRST'] || '').trim();
+    if (!agent) return;
+
+    if (!agentMap[agent]) agentMap[agent] = { name: agent, orders: [] };
+
+    const orderDT  = parseDateTime(row['ORDER_CREATION_DATE'], row['ORDER_CREATION_time']);
+    const claimDT  = parseDateTime(row['SALES_CLAIM_DATE_FIRST'], row['SALES_CLAIM_TIME_FIRST']);
+    const assignDT = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
+
+    const claimed      = !!claimDT;
+    const claimTimeSec = diffSeconds(orderDT, claimDT);
+    const assignTimeSec= diffSeconds(claimDT, assignDT);
+
+    agentMap[agent].orders.push({
+      orderNo:      row['CHANNEL_ORDER_NO'] || '',
+      channel:      row['CHANNEL'] || '',
+      status:       row['ESHOP_ORDER_STATUS'] || '',
+      hoursType:    row['HOURS_TYPE'] || '',
+      claimed,
+      claimTimeSec,
+      assignTimeSec,
+      orderDT,
+    });
+  });
+
+  return Object.values(agentMap).map(a => {
+    const claimTimes  = a.orders.map(o => o.claimTimeSec).filter(v => v != null && v >= 0 && v < 86400);
+    const assignTimes = a.orders.map(o => o.assignTimeSec).filter(v => v != null && v >= 0 && v < 86400);
+    return {
+      name:          a.name,
+      initials:      a.name.split(/\s+/).map(p => p[0]).join('').slice(0,2).toUpperCase(),
+      total:         a.orders.length,
+      claimed:       a.orders.filter(o => o.claimed).length,
+      claimTimeSec:  Math.round(avg(claimTimes)  ?? 0),
+      assignTimeSec: Math.round(avg(assignTimes) ?? 0),
+      orders:        a.orders,
+    };
+  }).sort((a,b) => b.total - a.total);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+function setStep(n) {
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById(`step${i}`);
+    el.classList.remove('active','done');
+    if (i < n)  el.classList.add('done');
+    if (i === n) el.classList.add('active');
+  }
+}
+
+function setProgress(pct, label) {
+  document.getElementById('progressFill').style.width  = pct + '%';
+  document.getElementById('progressLabel').textContent = label;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VALIDATION UI
+// ─────────────────────────────────────────────────────────────────────────────
+function renderValidation(fileHeaders) {
+  const headerSet = new Set(fileHeaders.map(h => h.trim()));
+
+  const found   = ACTIVE_COLS.filter(c => headerSet.has(c));
+  const missing = ACTIVE_COLS.filter(c => !headerSet.has(c));
+  const extra   = ALL_COLS.filter(c => !ACTIVE_COLS.includes(c) && headerSet.has(c));
+
+  // Summary chips
+  const sum = document.getElementById('valSummary');
+  sum.innerHTML = `
+    <span class="val-chip val-chip-ok">✓ ${found.length} found</span>
+    ${missing.length ? `<span class="val-chip val-chip-err">✗ ${missing.length} missing</span>` : ''}
+    <span class="val-chip val-chip-warn">${extra.length} future cols detected</span>
+  `;
+
+  // Column grid — active cols first, then show all found-but-not-active
+  const grid = document.getElementById('colGrid');
+  const items = ACTIVE_COLS.map(c => {
+    const ok = headerSet.has(c);
+    return `<div class="col-item ${ok ? 'found' : 'missing'}">
+      <span class="col-item-icon">${ok ? '✓' : '✗'}</span>
+      <span class="col-item-name">${c}</span>
+      <span class="col-item-status">${ok ? 'Active' : 'Missing'}</span>
+    </div>`;
+  }).join('');
+
+  // Show a few extra (future) columns as info
+  const extras = extra.slice(0,6).map(c =>
+    `<div class="col-item warn">
+      <span class="col-item-icon">◌</span>
+      <span class="col-item-name">${c}</span>
+      <span class="col-item-status">Future</span>
+    </div>`
+  ).join('');
+
+  grid.innerHTML = items + extras;
+  document.getElementById('validationSection').style.display = 'block';
+
+  return missing.length === 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREVIEW UI
+// ─────────────────────────────────────────────────────────────────────────────
+function renderPreview(rows, total) {
+  const cols    = ACTIVE_COLS.filter(c => rows[0] && c in rows[0]);
+  const preview = rows.slice(0, 10);
+
+  document.getElementById('previewSub').textContent =
+    `Showing ${preview.length} of ${total.toLocaleString()} rows · ${cols.length} active columns`;
+
+  const thead = document.getElementById('previewHead');
+  thead.innerHTML = `<tr>${cols.map(c => `<th title="${c}">${c.replace(/_/g,' ')}</th>`).join('')}</tr>`;
+
+  const tbody = document.getElementById('previewBody');
+  tbody.innerHTML = preview.map(row =>
+    `<tr>${cols.map(c => `<td title="${row[c] || ''}">${row[c] || '<span style="opacity:.3">—</span>'}</td>`).join('')}</tr>`
+  ).join('');
+
+  if (total > 10) {
+    document.getElementById('previewMore').textContent = `+ ${(total-10).toLocaleString()} more rows not shown`;
+  }
+
+  document.getElementById('previewSection').style.display = 'block';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORT
+// ─────────────────────────────────────────────────────────────────────────────
+function doImport() {
+  const btn = document.getElementById('importBtn');
+  btn.classList.add('loading');
+  btn.disabled = true;
+
+  // Chunked processing to avoid blocking UI
+  setTimeout(() => {
+    const agents  = processRows(parsedRows);
+    const allOrders    = parsedRows.length;
+    const claimed      = agents.reduce((s,a) => s + a.claimed, 0);
+    const avgClaim     = Math.round(avg(agents.map(a => a.claimTimeSec).filter(v => v > 0)) ?? 0);
+    const avgAssign    = Math.round(avg(agents.map(a => a.assignTimeSec).filter(v => v > 0)) ?? 0);
+
+    // Date range
+    const dates = parsedRows
+      .map(r => parseDateTime(r['ORDER_CREATION_DATE'], r['ORDER_CREATION_time']))
+      .filter(Boolean).sort((a,b) => a-b);
+    const dateFrom = dates[0]       ? dates[0].toLocaleDateString()       : '—';
+    const dateTo   = dates.at(-1)   ? dates.at(-1).toLocaleDateString()   : '—';
+
+    const payload = {
+      importedAt:   new Date().toISOString(),
+      filename:     currentFile ? currentFile.name : 'unknown.csv',
+      rowCount:     allOrders,
+      agentCount:   agents.length,
+      agents,
+      summary: {
+        totalOrders: allOrders,
+        totalClaimed: claimed,
+        avgClaimTimeSec:  avgClaim,
+        avgAssignTimeSec: avgAssign,
+        dateFrom, dateTo,
+      }
+    };
+
+    // Save to localStorage
+    try {
+      localStorage.setItem('tpw_data', JSON.stringify(payload));
+      saveHistory(payload);
+    } catch(e) {
+      // localStorage quota — strip raw orders array to slim it
+      agents.forEach(a => delete a.orders);
+      localStorage.setItem('tpw_data', JSON.stringify(payload));
+      saveHistory(payload);
+    }
+
+    btn.classList.remove('loading');
+    document.getElementById('importSection').style.display  = 'none';
+    showSuccess(payload);
+    setStep(4);
+    renderHistory();
+  }, 600);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUCCESS UI
+// ─────────────────────────────────────────────────────────────────────────────
+function showSuccess(p) {
+  const s = p.summary;
+  document.getElementById('successSub').textContent =
+    `${p.filename} · ${p.rowCount.toLocaleString()} rows · ${p.agentCount} agents · ${s.dateFrom} – ${s.dateTo}`;
+
+  document.getElementById('successKpis').innerHTML = [
+    { val: p.rowCount.toLocaleString(),          lbl: 'Total Orders' },
+    { val: s.totalClaimed.toLocaleString(),       lbl: 'Claimed Orders' },
+    { val: p.agentCount,                          lbl: 'Unique Agents' },
+    { val: fmtTime(s.avgClaimTimeSec),            lbl: 'Avg Claim Time' },
+    { val: fmtTime(s.avgAssignTimeSec),           lbl: 'Avg Assignment Time' },
+    { val: `${s.dateFrom}`,                       lbl: 'Data From' },
+  ].map(k => `
+    <div class="success-kpi">
+      <div class="success-kpi-val">${k.val}</div>
+      <div class="success-kpi-lbl">${k.lbl}</div>
+    </div>`).join('');
+
+  document.getElementById('successSection').style.display = 'block';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY
+// ─────────────────────────────────────────────────────────────────────────────
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem('tpw_history') || '[]'); }
+  catch { return []; }
+}
+function saveHistory(payload) {
+  const hist = loadHistory();
+  hist.unshift({
+    id:          Date.now(),
+    importedAt:  payload.importedAt,
+    filename:    payload.filename,
+    rowCount:    payload.rowCount,
+    agentCount:  payload.agentCount,
+  });
+  localStorage.setItem('tpw_history', JSON.stringify(hist.slice(0, 10)));
+}
+function renderHistory() {
+  const hist = loadHistory();
+  const list = document.getElementById('historyList');
+  if (!hist.length) {
+    list.innerHTML = `<div class="empty-state">
+      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      No imports yet. Upload a CSV to get started.
+    </div>`;
+    return;
+  }
+  list.innerHTML = hist.map(h => `
+    <div class="history-item">
+      <div class="history-icon">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      </div>
+      <div class="history-info">
+        <div class="history-name">${h.filename}</div>
+        <div class="history-meta">${new Date(h.importedAt).toLocaleString()} · ${h.rowCount.toLocaleString()} rows · ${h.agentCount} agents</div>
+      </div>
+      <span class="history-badge">✓ Imported</span>
+      <button class="history-del" onclick="deleteHistory(${h.id})" title="Remove">×</button>
+    </div>`).join('');
+}
+function deleteHistory(id) {
+  const hist = loadHistory().filter(h => h.id !== id);
+  localStorage.setItem('tpw_history', JSON.stringify(hist));
+  renderHistory();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FILE HANDLING
+// ─────────────────────────────────────────────────────────────────────────────
+function handleFile(file) {
+  if (!file) return;
+  currentFile = file;
+
+  // Show file strip
+  document.getElementById('fileName').textContent = file.name;
+  document.getElementById('fileMeta').textContent = `${(file.size / 1024).toFixed(1)} KB · ${file.type || 'text/csv'}`;
+  document.getElementById('fileStrip').classList.add('show');
+
+  // Show progress
+  const prog = document.getElementById('parseProgress');
+  prog.classList.add('show');
+  setProgress(10, 'Reading file…');
+  setStep(2);
+
+  // Hide previous sections
+  document.getElementById('validationSection').style.display = 'none';
+  document.getElementById('previewSection').style.display    = 'none';
+  document.getElementById('importSection').style.display     = 'none';
+  document.getElementById('successSection').style.display    = 'none';
+
+  const reader = new FileReader();
+  reader.onprogress = (e) => {
+    if (e.lengthComputable) setProgress(10 + Math.round((e.loaded/e.total)*50), 'Reading file…');
+  };
+  reader.onload = (e) => {
+    setProgress(65, 'Parsing CSV…');
+    setTimeout(() => {
+      const { headers, rows } = parseCSV(e.target.result);
+      parsedHeaders = headers;
+      parsedRows    = rows;
+
+      setProgress(80, 'Validating columns…');
+      setTimeout(() => {
+        const valid = renderValidation(headers);
+        setProgress(95, 'Building preview…');
+
+        setTimeout(() => {
+          renderPreview(rows, rows.length);
+          prog.classList.remove('show');
+          setProgress(0, '');
+
+          if (valid) {
+            document.getElementById('importTitle').textContent =
+              `Ready to import ${rows.length.toLocaleString()} orders`;
+            document.getElementById('importSub').textContent =
+              `${headers.length} columns detected · All required columns found · ${ACTIVE_COLS.length} active for analysis`;
+            document.getElementById('importSection').style.display = 'block';
+            setStep(3);
+          }
+        }, 200);
+      }, 200);
+    }, 100);
+  };
+  reader.readAsText(file);
+}
+
+function resetUpload() {
+  currentFile   = null;
+  parsedHeaders = [];
+  parsedRows    = [];
+  document.getElementById('fileStrip').classList.remove('show');
+  document.getElementById('validationSection').style.display = 'none';
+  document.getElementById('previewSection').style.display    = 'none';
+  document.getElementById('importSection').style.display     = 'none';
+  document.getElementById('successSection').style.display    = 'none';
+  document.getElementById('parseProgress').classList.remove('show');
+  document.getElementById('fileInput').value = '';
+  setStep(1);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EVENTS
+// ─────────────────────────────────────────────────────────────────────────────
+document.getElementById('fileInput').addEventListener('change', e => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+const dropZone = document.getElementById('dropZone');
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
+document.getElementById('removeFile').addEventListener('click', resetUpload);
+document.getElementById('importBtn').addEventListener('click', doImport);
+document.getElementById('newImportBtn').addEventListener('click', resetUpload);
+document.getElementById('clearHistoryBtn').addEventListener('click', () => {
+  localStorage.removeItem('tpw_history');
+  renderHistory();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────────────────────────────────────
+renderHistory();
+
+// If data already exists, show a banner
+const existing = localStorage.getItem('tpw_data');
+if (existing) {
+  try {
+    const d = JSON.parse(existing);
+    const bar = document.getElementById('importSection');
+    bar.style.display = 'block';
+    document.getElementById('importTitle').textContent =
+      `Active dataset: ${d.filename} (${d.summary.totalOrders.toLocaleString()} orders)`;
+    document.getElementById('importSub').textContent =
+      `Imported ${new Date(d.importedAt).toLocaleString()} · Upload a new file to replace it`;
+    document.getElementById('importBtn').textContent = 'Replace Data';
+    document.getElementById('importBtn').disabled    = true;
+    document.getElementById('importBtn').style.opacity = '0.5';
+  } catch(_) {}
+}
+</script>
+</body>
+</html>

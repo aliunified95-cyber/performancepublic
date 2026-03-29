@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(firebase --version)",
+      "Bash(node createUser.mjs)",
+      "Bash(curl:*)"
+    ]
+  }
+}
