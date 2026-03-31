@@ -31,8 +31,8 @@ export default function Navbar({ activeLink }) {
     <nav className="nav">
       <button
         className="nav-logo"
-        onClick={() => navigate('/performance')}
-        aria-label="Go to performance dashboard"
+        onClick={() => navigate('/dashboard')}
+        aria-label="Go to dashboard"
       >
         <div className="nav-logo-icon">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -46,10 +46,28 @@ export default function Navbar({ activeLink }) {
 
       <div className="nav-links">
         <Link
+          to="/dashboard"
+          className={`nav-link${activeLink === 'dashboard' ? ' active' : ''}`}
+        >
+          Dashboard
+        </Link>
+        <Link
           to="/performance"
           className={`nav-link${activeLink === 'performance' ? ' active' : ''}`}
         >
-          Sales Performance
+          Sales
+        </Link>
+        <Link
+          to="/logistics"
+          className={`nav-link${activeLink === 'logistics' ? ' active' : ''}`}
+        >
+          Logistics
+        </Link>
+        <Link
+          to="/activation"
+          className={`nav-link${activeLink === 'activation' ? ' active' : ''}`}
+        >
+          Activation
         </Link>
         <Link
           to="/admin"

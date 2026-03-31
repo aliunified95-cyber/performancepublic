@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   collection,
   query,
@@ -9,7 +8,6 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import Navbar from '../components/Navbar';
-import { calculateSLAMetrics, WORKING_HOURS } from '../utils/sla';
 
 // ─── COLORS ────────────────────────────────────────────────────────────────────
 const COLORS = [
@@ -19,23 +17,17 @@ const COLORS = [
 ];
 
 // ─── DEMO DATA ─────────────────────────────────────────────────────────────────
-// Threshold for bad handling: 1000 minutes = 60000 seconds
-const BAD_HANDLING_THRESHOLD_SEC = 60000;
-
-// Default SLA: 2 hours = 7200 seconds
-const DEFAULT_SLA_SECONDS = 7200;
-
 const DEMO_AGENTS = [
-  { name:'Sarah Mitchell',  role:'Senior Agent', initials:'SM', color:COLORS[0],  total:178, claimed:162, claimTimeSec:198,  assignTimeSec:52,  badHandlingCount: 2, status:'active',  trend:'up' },
-  { name:'James Okafor',    role:'Sales Agent',  initials:'JO', color:COLORS[1],  total:154, claimed:138, claimTimeSec:245,  assignTimeSec:67,  badHandlingCount: 1, status:'active',  trend:'up' },
-  { name:'Priya Sharma',    role:'Sales Agent',  initials:'PS', color:COLORS[2],  total:143, claimed:121, claimTimeSec:302,  assignTimeSec:74,  badHandlingCount: 5, status:'away',    trend:'down' },
-  { name:'Carlos Reyes',    role:'Senior Agent', initials:'CR', color:COLORS[3],  total:137, claimed:130, claimTimeSec:180,  assignTimeSec:48,  badHandlingCount: 0, status:'active',  trend:'up' },
-  { name:'Yuki Tanaka',     role:'Sales Agent',  initials:'YT', color:COLORS[4],  total:129, claimed:107, claimTimeSec:355,  assignTimeSec:91,  badHandlingCount: 3, status:'active',  trend:'neutral' },
-  { name:'Amara Diallo',    role:'Sales Agent',  initials:'AD', color:COLORS[5],  total:124, claimed:110, claimTimeSec:270,  assignTimeSec:60,  badHandlingCount: 1, status:'offline', trend:'down' },
-  { name:'Liam Brennan',    role:'Junior Agent', initials:'LB', color:COLORS[6],  total:108, claimed:88,  claimTimeSec:420,  assignTimeSec:110, badHandlingCount: 8, status:'active',  trend:'up' },
-  { name:'Fatima Al-Zahra', role:'Sales Agent',  initials:'FA', color:COLORS[7],  total:101, claimed:91,  claimTimeSec:315,  assignTimeSec:80,  badHandlingCount: 2, status:'away',    trend:'neutral' },
-  { name:'Noah Williams',   role:'Junior Agent', initials:'NW', color:COLORS[8],  total:96,  claimed:74,  claimTimeSec:480,  assignTimeSec:120, badHandlingCount: 12, status:'offline', trend:'down' },
-  { name:'Elena Kovacs',    role:'Sales Agent',  initials:'EK', color:COLORS[9],  total:114, claimed:98,  claimTimeSec:260,  assignTimeSec:58,  badHandlingCount: 1, status:'active',  trend:'up' },
+  { name:'Karim Hassan',    role:'Logistics Lead',   initials:'KH', color:COLORS[0],  total:156, claimed:148, avgClaimTimeSec:420,  activationAssignTimeSec:1800, status:'active',  trend:'up' },
+  { name:'Aisha Patel',     role:'Logistics Agent',  initials:'AP', color:COLORS[1],  total:142, claimed:135, avgClaimTimeSec:380,  activationAssignTimeSec:1650, status:'active',  trend:'up' },
+  { name:'Thomas Wright',   role:'Logistics Agent',  initials:'TW', color:COLORS[2],  total:138, claimed:128, avgClaimTimeSec:520,  activationAssignTimeSec:2100, status:'active',  trend:'neutral' },
+  { name:'Leila Mahmoud',   role:'Senior Logistics', initials:'LM', color:COLORS[3],  total:131, claimed:125, avgClaimTimeSec:340,  activationAssignTimeSec:1450, status:'active',  trend:'up' },
+  { name:'Marcus Johnson',  role:'Logistics Agent',  initials:'MJ', color:COLORS[4],  total:124, claimed:118, avgClaimTimeSec:480,  activationAssignTimeSec:1920, status:'away',    trend:'down' },
+  { name:'Sophie Chen',     role:'Logistics Agent',  initials:'SC', color:COLORS[5],  total:118, claimed:108, avgClaimTimeSec:560,  activationAssignTimeSec:2250, status:'active',  trend:'down' },
+  { name:'Ahmed Ibrahim',   role:'Junior Logistics', initials:'AI', color:COLORS[6],  total:105, claimed:92,  avgClaimTimeSec:720,  activationAssignTimeSec:2800, status:'offline', trend:'neutral' },
+  { name:'Emma Rodriguez',  role:'Logistics Agent',  initials:'ER', color:COLORS[7],  total:112, claimed:106, avgClaimTimeSec:410,  activationAssignTimeSec:1680, status:'active',  trend:'up' },
+  { name:'Omar Khalil',     role:'Logistics Agent',  initials:'OK', color:COLORS[8],  total:98,  claimed:92,  avgClaimTimeSec:450,  activationAssignTimeSec:1750, status:'active',  trend:'up' },
+  { name:'Nina Kowalski',   role:'Logistics Agent',  initials:'NK', color:COLORS[9],  total:102, claimed:95,  avgClaimTimeSec:490,  activationAssignTimeSec:1980, status:'away',    trend:'neutral' },
 ];
 
 const DEMO_MULTIPLIERS = {
@@ -52,9 +44,12 @@ const ROWS_PER_PAGE = 1000;
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
 function fmtTime(sec) {
-  if (!sec || isNaN(sec)) return '0h 00m';
-  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
-  return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (!sec || isNaN(sec)) return '0m 00s';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.round(sec % 60);
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  return `${m}m ${String(s).padStart(2, '0')}s`;
 }
 
 function avg(arr) {
@@ -95,17 +90,17 @@ function LoadingState() {
   return (
     <div className="loading-state">
       <div className="spinner-lg" aria-hidden="true" />
-      <p>Loading performance data…</p>
+      <p>Loading logistics data…</p>
     </div>
   );
 }
 
 function HeroBadge({ data, currentRange, customDates, importMeta, loadState, slaMinutes }) {
-  const totalOrders  = data.reduce((s, a) => s + a.total, 0);
-  const totalClaimed = data.reduce((s, a) => s + a.claimed, 0);
-  const totalBadHandling = data.reduce((s, a) => s + (a.badHandlingCount || 0), 0);
-  const avgClaim     = Math.round(avg(data.map(a => a.claimTimeSec)));
-  const avgAssign    = Math.round(avg(data.map(a => a.assignTimeSec)));
+  const totalOrders    = data.reduce((s, a) => s + a.total, 0);
+  const totalClaimed   = data.reduce((s, a) => s + a.claimed, 0);
+  const avgClaim       = Math.round(avg(data.map(a => a.avgClaimTimeSec)));
+  const avgActivation  = Math.round(avg(data.map(a => a.activationAssignTimeSec)));
+  const claimRate      = totalOrders > 0 ? Math.round((totalClaimed / totalOrders) * 100) : 0;
   const slaSeconds = (slaMinutes || 120) * 60;
   const isSLAExceeded = avgClaim > slaSeconds;
 
@@ -117,23 +112,22 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
     ? (importMeta?.filename || 'Imported Data')
     : 'Demo Data';
 
-  const ch = Math.floor(avgClaim / 3600);
-  const cm = Math.round((avgClaim % 3600) / 60);
-  const ah = Math.floor(avgAssign / 3600);
-  const am = Math.round((avgAssign % 3600) / 60);
+  const cm = Math.floor(avgClaim / 60), cs = avgClaim % 60;
+  const ah = Math.floor(avgActivation / 3600);
+  const am = Math.floor((avgActivation % 3600) / 60);
 
   return (
     <div className="hero-badge">
       <div className="hero-badge-label">
         <span className="dot" aria-hidden="true" />
-        Team Overview
+        Logistics Team Overview
       </div>
       <div className="hero-badge-title">
         All Agents · {label} · {src}
       </div>
 
-      <div className="hero-kpis">
-        {/* Total Orders */}
+      <div className="hero-kpis" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+        {/* Total Assigned */}
         <div className="hero-kpi">
           <div className="hero-kpi-icon" style={{ background: 'rgba(46,204,138,0.18)' }}>
             <svg viewBox="0 0 24 24" style={{ stroke: 'var(--emerald)' }} aria-hidden="true">
@@ -143,7 +137,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
             </svg>
           </div>
           <div className="hero-kpi-value">{totalOrders.toLocaleString()}</div>
-          <div className="hero-kpi-label">Total Orders</div>
+          <div className="hero-kpi-label">Total Assigned</div>
           <span className="hero-kpi-badge badge-neu">All agents</span>
         </div>
 
@@ -157,7 +151,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
           <div className="hero-kpi-value">{totalClaimed.toLocaleString()}</div>
           <div className="hero-kpi-label">Claimed Orders</div>
           <span className="hero-kpi-badge badge-neu">
-            {totalOrders > 0 ? Math.round((totalClaimed / totalOrders) * 100) : 0}% rate
+            {claimRate}% rate
           </span>
         </div>
 
@@ -170,45 +164,40 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
             </svg>
           </div>
           <div className="hero-kpi-value" style={{ color: isSLAExceeded ? '#E74C3C' : 'inherit' }}>
-            {ch}<sup>h {String(cm).padStart(2, '0')}m</sup>
+            {cm}<sup>m {String(cs).padStart(2, '0')}s</sup>
           </div>
           <div className="hero-kpi-label">Avg Claim Time</div>
           <span className="hero-kpi-badge badge-neu" style={{ color: isSLAExceeded ? '#E74C3C' : 'inherit', background: isSLAExceeded ? 'rgba(231,76,60,0.12)' : '' }}>
-            {isSLAExceeded ? 'SLA Exceeded' : 'team avg'}
+            {isSLAExceeded ? 'SLA Exceeded' : 'assign→claim'}
           </span>
         </div>
 
-        {/* Avg Assignment Time */}
+        {/* Avg Time to Activation */}
         <div className="hero-kpi">
-          <div className="hero-kpi-icon" style={{ background: 'rgba(46,204,138,0.1)' }}>
-            <svg viewBox="0 0 24 24" style={{ stroke: 'var(--emerald)' }} aria-hidden="true">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-              <circle cx="9" cy="7" r="4"/>
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          <div className="hero-kpi-icon" style={{ background: 'rgba(255,193,7,0.12)' }}>
+            <svg viewBox="0 0 24 24" style={{ stroke: '#ffc107' }} aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 8 14"/>
             </svg>
           </div>
           <div className="hero-kpi-value">
             {ah}<sup>h {String(am).padStart(2, '0')}m</sup>
           </div>
-          <div className="hero-kpi-label">Avg Assignment Time</div>
-          <span className="hero-kpi-badge badge-neu">team avg</span>
+          <div className="hero-kpi-label">Avg to Activation</div>
+          <span className="hero-kpi-badge badge-neu">claim→activation</span>
         </div>
 
-        {/* Bad Handling Count */}
+        {/* Claim Rate */}
         <div className="hero-kpi">
-          <div className="hero-kpi-icon" style={{ background: 'rgba(231,76,60,0.18)' }}>
-            <svg viewBox="0 0 24 24" style={{ stroke: '#E74C3C' }} aria-hidden="true">
-              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-              <line x1="12" y1="9" x2="12" y2="13"/>
-              <line x1="12" y1="17" x2="12.01" y2="17"/>
+          <div className="hero-kpi-icon" style={{ background: 'rgba(46,204,138,0.1)' }}>
+            <svg viewBox="0 0 24 24" style={{ stroke: 'var(--emerald)' }} aria-hidden="true">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+              <polyline points="22 4 12 14.01 9 11.01"/>
             </svg>
           </div>
-          <div className="hero-kpi-value" style={{ color: totalBadHandling > 0 ? '#E74C3C' : 'inherit' }}>
-            {totalBadHandling.toLocaleString()}
-          </div>
-          <div className="hero-kpi-label">Bad Handling</div>
-          <span className="hero-kpi-badge badge-neu">{`> ${BAD_HANDLING_THRESHOLD_SEC / 60} min`}</span>
+          <div className="hero-kpi-value">{claimRate}<sup>%</sup></div>
+          <div className="hero-kpi-label">Claim Rate</div>
+          <span className="hero-kpi-badge badge-neu">of assigned</span>
         </div>
       </div>
     </div>
@@ -228,12 +217,11 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
     if (col === 'status')     return dir === 'asc' ? (a.status||'').localeCompare(b.status||'') : (b.status||'').localeCompare(a.status||'');
     if (col === 'trend')      return dir === 'asc' ? (a.trend||'').localeCompare(b.trend||'') : (b.trend||'').localeCompare(a.trend||'');
     let av, bv;
-    if (col === 'total')      { av = a.total;        bv = b.total; }
-    else if (col === 'claimed')    { av = a.claimed;      bv = b.claimed; }
-    else if (col === 'claimRate')  { av = a.claimed / Math.max(1, a.total); bv = b.claimed / Math.max(1, b.total); }
-    else if (col === 'claimTime')  { av = a.claimTimeSec;  bv = b.claimTimeSec; }
-    else if (col === 'assignTime') { av = a.assignTimeSec; bv = b.assignTimeSec; }
-    else if (col === 'badHandling') { av = a.badHandlingCount || 0; bv = b.badHandlingCount || 0; }
+    if (col === 'total')              { av = a.total;              bv = b.total; }
+    else if (col === 'claimed')       { av = a.claimed;            bv = b.claimed; }
+    else if (col === 'claimRate')     { av = a.claimed / Math.max(1, a.total); bv = b.claimed / Math.max(1, b.total); }
+    else if (col === 'claimTime')     { av = a.avgClaimTimeSec;    bv = b.avgClaimTimeSec; }
+    else if (col === 'activationTime'){ av = a.activationAssignTimeSec; bv = b.activationAssignTimeSec; }
     else { av = a.total; bv = b.total; }
     return dir === 'asc' ? av - bv : bv - av;
   });
@@ -244,15 +232,14 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
   const paged      = filtered.slice((safePage - 1) * ROWS_PER_PAGE, safePage * ROWS_PER_PAGE);
 
   const cols = [
-    { key: 'name',       label: 'Agent' },
-    { key: 'total',      label: 'Total Orders' },
-    { key: 'claimed',    label: 'Claimed' },
-    { key: 'claimRate',  label: 'Claim Rate' },
-    { key: 'claimTime',  label: 'Avg Claim Time' },
-    { key: 'assignTime', label: 'Avg Assign Time' },
-    { key: 'badHandling', label: 'Bad Handling' },
-    { key: 'status',     label: 'Status' },
-    { key: 'trend',      label: 'Trend' },
+    { key: 'name',           label: 'Agent' },
+    { key: 'total',          label: 'Total Assigned' },
+    { key: 'claimed',        label: 'Claimed' },
+    { key: 'claimRate',      label: 'Claim Rate' },
+    { key: 'claimTime',      label: 'Avg Claim Time' },
+    { key: 'activationTime', label: 'Avg to Activation' },
+    { key: 'status',         label: 'Status' },
+    { key: 'trend',          label: 'Trend' },
   ];
 
   function SortIcon({ colKey }) {
@@ -266,7 +253,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
       <div className="section-header">
         <div>
           <div className="section-title">Agent Breakdown</div>
-          <div className="section-sub">Individual performance per agent</div>
+          <div className="section-sub">Individual logistics performance per agent</div>
         </div>
         <div className="search-wrap">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -302,7 +289,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
           <tbody>
             {paged.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
+                <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
                   No agents found
                 </td>
               </tr>
@@ -314,7 +301,6 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                 : agent.status === 'away' ? 'pill-away' : 'pill-offline';
               const statusLabel = agent.status === 'active' ? 'Active'
                 : agent.status === 'away' ? 'Away' : 'Offline';
-              const badHandlingCount = agent.badHandlingCount || 0;
 
               return (
                 <tr key={agent.name + i}>
@@ -325,7 +311,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                       </div>
                       <div>
                         <div className="agent-name">{agent.name}</div>
-                        <div className="agent-role">{agent.role || 'Sales Agent'}</div>
+                        <div className="agent-role">{agent.role || 'Logistics Agent'}</div>
                       </div>
                     </div>
                   </td>
@@ -343,24 +329,15 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                     </div>
                   </td>
                   <td className="num-cell" style={{ 
-                    color: agent.claimTimeSec > slaSeconds ? '#E74C3C' : 'inherit',
-                    fontWeight: agent.claimTimeSec > slaSeconds ? 600 : 'inherit'
+                    color: agent.avgClaimTimeSec > slaSeconds ? '#E74C3C' : 'inherit',
+                    fontWeight: agent.avgClaimTimeSec > slaSeconds ? 600 : 'inherit'
                   }}>
-                    {fmtTime(agent.claimTimeSec)}
-                    {agent.claimTimeSec > slaSeconds && (
+                    {fmtTime(agent.avgClaimTimeSec)}
+                    {agent.avgClaimTimeSec > slaSeconds && (
                       <span style={{ fontSize: '10px', marginLeft: '4px', opacity: 0.8 }}>(SLA)</span>
                     )}
                   </td>
-                  <td className="num-cell">{fmtTime(agent.assignTimeSec)}</td>
-                  <td className="num-cell">
-                    {badHandlingCount > 0 ? (
-                      <span style={{ color: '#E74C3C', fontWeight: 600 }}>
-                        {badHandlingCount}
-                      </span>
-                    ) : (
-                      <span style={{ color: 'var(--text-dim)' }}>0</span>
-                    )}
-                  </td>
+                  <td className="num-cell">{fmtTime(agent.activationAssignTimeSec)}</td>
                   <td>
                     <span className={`status-pill ${statusCls}`}>{statusLabel}</span>
                   </td>
@@ -377,9 +354,6 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
         <div className="table-footer">
           <span>
             Showing {total === 0 ? 0 : (safePage - 1) * ROWS_PER_PAGE + 1}–{Math.min(safePage * ROWS_PER_PAGE, total)} of {total} agents
-            <span style={{ marginLeft: '16px', color: 'var(--text-dim)', fontSize: '12px' }}>
-              (Bad Handling = Claim time &gt; 1000 min, excluded from averages)
-            </span>
           </span>
           <div className="pagination">
             <button
@@ -417,7 +391,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
 }
 
 // ─── MAIN PAGE ─────────────────────────────────────────────────────────────────
-export default function AgentsPerformance() {
+export default function LogisticsPerformance() {
   const [loadState, setLoadState]     = useState('loading');
   const [importMeta, setImportMeta]   = useState(null);
   const [allOrders, setAllOrders]     = useState([]);
@@ -427,7 +401,7 @@ export default function AgentsPerformance() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortState, setSortState]     = useState({ col: 'total', dir: 'desc' });
   const [page, setPage]               = useState(1);
-  const [slaSettings, setSlaSettings] = useState({ sales: { workingHours: DEFAULT_SLA_SECONDS / 60, nonWorkingHours: DEFAULT_SLA_SECONDS / 60 } });
+  const [slaSettings, setSlaSettings] = useState({ logistics: { workingHours: DEFAULT_SLA_SECONDS / 60, nonWorkingHours: DEFAULT_SLA_SECONDS / 60 } });
 
   useEffect(() => {
     loadData();
@@ -440,7 +414,7 @@ export default function AgentsPerformance() {
       if (!slaSnap.empty) {
         const data = slaSnap.docs[0].data();
         setSlaSettings({
-          sales: data.sales || { workingHours: 120, nonWorkingHours: 120 },
+          logistics: data.logistics || { workingHours: 120, nonWorkingHours: 120 },
         });
       }
     } catch (err) {
@@ -464,13 +438,20 @@ export default function AgentsPerformance() {
       const meta      = { id: docSnap.id, ...docSnap.data() };
       setImportMeta(meta);
 
-      // Load orders subcollection (limited to recent 5000 for performance)
-      const ordersSnap = await getDocs(query(collection(db, 'imports', docSnap.id, 'orders'), orderBy('orderDT', 'desc'), limit(5000)));
+      // Load logistics orders subcollection
+      const ordersSnap = await getDocs(query(
+        collection(db, 'imports', docSnap.id, 'logisticsOrders'), 
+        orderBy('assignDT', 'desc'), 
+        limit(5000)
+      ));
+      
       const orders = ordersSnap.docs.map(d => {
         const data = d.data();
         return {
           ...data,
-          orderDT: data.orderDT?.toDate ? data.orderDT.toDate() : null,
+          assignDT: data.assignDT?.toDate ? data.assignDT.toDate() : null,
+          claimDT: data.claimDT?.toDate ? data.claimDT.toDate() : null,
+          activationAssignDT: data.activationAssignDT?.toDate ? data.activationAssignDT.toDate() : null,
         };
       });
 
@@ -501,21 +482,21 @@ export default function AgentsPerformance() {
 
       return DEMO_AGENTS.map(a => ({
         ...a,
-        total:         Math.max(0, Math.round(a.total * mult)),
-        claimed:       Math.max(0, Math.round(a.claimed * mult)),
-        claimTimeSec:  Math.round(a.claimTimeSec  * (0.88 + Math.random() * 0.24)),
-        assignTimeSec: Math.round(a.assignTimeSec * (0.88 + Math.random() * 0.24)),
+        total:                  Math.max(0, Math.round(a.total * mult)),
+        claimed:                Math.max(0, Math.round(a.claimed * mult)),
+        avgClaimTimeSec:        Math.round(a.avgClaimTimeSec  * (0.88 + Math.random() * 0.24)),
+        activationAssignTimeSec: Math.round(a.activationAssignTimeSec * (0.88 + Math.random() * 0.24)),
       }));
     }
 
     // Live data: aggregate from allOrders
     const bounds = getRangeBounds(currentRange, customDates);
     const filteredOrders = bounds
-      ? allOrders.filter(o => o.orderDT && o.orderDT >= bounds.from && o.orderDT <= bounds.to)
+      ? allOrders.filter(o => o.assignDT && o.assignDT >= bounds.from && o.assignDT <= bounds.to)
       : allOrders;
 
     const agentMap = {};
-    filteredOrders.forEach((o, idx) => {
+    filteredOrders.forEach((o) => {
       const name = o.agentName || '';
       if (!name) return;
       if (!agentMap[name]) agentMap[name] = { name, orders: [] };
@@ -532,36 +513,32 @@ export default function AgentsPerformance() {
       const color    = COLORS[idx % COLORS.length];
       const claimed  = a.orders.filter(o => o.claimed).length;
       
-      // Calculate bad handling: orders with claim time > 1000 minutes (60000 seconds)
-      const badHandlingCount = a.orders.filter(o => o.claimTimeSec != null && o.claimTimeSec > BAD_HANDLING_THRESHOLD_SEC).length;
-      
-      // Filter out bad handling times from average calculation
-      const claimTimes  = a.orders
+      const claimTimes = a.orders
         .map(o => o.claimTimeSec)
-        .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
-      const assignTimes = a.orders
-        .map(o => o.assignTimeSec)
         .filter(v => v != null && v >= 0 && v < 86400);
       
+      const activationTimes = a.orders
+        .map(o => o.activationAssignTimeSec)
+        .filter(v => v != null && v >= 0 && v < 86400 * 7); // Max 7 days
+
       const mapping = mappingMap[a.name];
       const visible = mapping ? mapping.visible !== false : true;
 
       return {
         name: a.name,
-        role:          mapping?.displayName || a.name,
+        role: mapping?.displayName || 'Logistics Agent',
         initials,
         color,
         total:         a.orders.length,
         claimed,
-        claimTimeSec:  Math.round(avg(claimTimes)),
-        assignTimeSec: Math.round(avg(assignTimes)),
-        badHandlingCount,
+        avgClaimTimeSec: Math.round(avg(claimTimes)),
+        activationAssignTimeSec: Math.round(avg(activationTimes)),
         status:        'active',
         trend:         'neutral',
         visible,
       };
     }).filter(a => a.total > 0 && a.visible).sort((a, b) => b.total - a.total);
-  }, [loadState, allOrders, currentRange, customDates]);
+  }, [loadState, allOrders, agentMappings, currentRange, customDates]);
 
   function handleSort(col) {
     setSortState(prev => ({
@@ -582,7 +559,7 @@ export default function AgentsPerformance() {
 
   return (
     <>
-      <Navbar activeLink="performance" />
+      <Navbar activeLink="logistics" />
       <div className="page">
         {loadState === 'loading' ? (
           <LoadingState />
@@ -590,7 +567,7 @@ export default function AgentsPerformance() {
           <>
             <div className="page-header">
               <div>
-                <h1>Sales Agents Performance</h1>
+                <h1>Logistics Agents Performance</h1>
                 <p>
                   Showing data for: <strong>{label}</strong>
                   {loadState === 'demo' && (
@@ -646,7 +623,7 @@ export default function AgentsPerformance() {
               customDates={customDates}
               importMeta={importMeta}
               loadState={loadState}
-              slaMinutes={slaSettings?.sales?.workingHours}
+              slaMinutes={slaSettings?.logistics?.workingHours}
             />
 
             <AgentTable
@@ -657,7 +634,7 @@ export default function AgentsPerformance() {
               onSort={handleSort}
               page={page}
               onPage={setPage}
-              slaMinutes={slaSettings?.sales?.workingHours}
+              slaMinutes={slaSettings?.logistics?.workingHours}
             />
           </>
         )}

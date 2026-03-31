@@ -5,7 +5,8 @@
       "Bash(npm run:*)",
       "Bash(firebase --version)",
       "Bash(node createUser.mjs)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(xargs ls:*)"
     ]
   }
 }

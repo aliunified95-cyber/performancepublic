@@ -5,6 +5,9 @@ import { auth } from './firebase';
 import Login from './pages/Login';
 import Admin from './pages/Admin';
 import AgentsPerformance from './pages/AgentsPerformance';
+import ActivationPerformance from './pages/ActivationPerformance';
+import LogisticsPerformance from './pages/LogisticsPerformance';
+import Dashboard from './pages/Dashboard';
 
 export const AuthContext = createContext({ user: undefined });
 
@@ -42,7 +45,7 @@ function ProtectedRoute({ children }) {
 function AuthRedirect() {
   const { user } = useAuth();
   if (user === undefined) return null;
-  if (user) return <Navigate to="/performance" replace />;
+  if (user) return <Navigate to="/dashboard" replace />;
   return <Navigate to="/login" replace />;
 }
 
@@ -62,10 +65,42 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/performance"
             element={
               <ProtectedRoute>
                 <AgentsPerformance />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/activation"
+            element={
+              <ProtectedRoute>
+                <ActivationPerformance />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/logistics"
+            element={
+              <ProtectedRoute>
+                <LogisticsPerformance />
               </ProtectedRoute>
             }
           />

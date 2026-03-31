@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   collection,
   doc,
   addDoc,
+  setDoc,
   writeBatch,
   getDocs,
   query,
@@ -15,6 +16,7 @@ import {
 import { signOut } from 'firebase/auth';
 import { db, auth } from '../firebase';
 import Navbar from '../components/Navbar';
+import { WORKING_HOURS } from '../utils/sla';
 
 // ─── COLUMN DEFINITIONS ────────────────────────────────────────────────────────
 const ACTIVE_COLS = [
@@ -116,17 +118,55 @@ function parseDateTime(dateStr, timeStr) {
   dateStr = dateStr.trim();
   timeStr = (timeStr || '').trim();
 
+  // If dateStr contains a space, it may be a combined "date time" value (e.g. "3/29/2026 1:47 PM")
+  const spaceIdx = dateStr.indexOf(' ');
+  if (spaceIdx > 0) {
+    if (!timeStr) timeStr = dateStr.slice(spaceIdx + 1).trim();
+    dateStr = dateStr.slice(0, spaceIdx);
+  }
+
+  // Convert 12-hour AM/PM to 24-hour
+  const ampmMatch = timeStr.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])$/);
+  if (ampmMatch) {
+    let h = parseInt(ampmMatch[1], 10);
+    const m = ampmMatch[2], s = ampmMatch[3] || '00', ampm = ampmMatch[4].toUpperCase();
+    if (ampm === 'AM' && h === 12) h = 0;
+    if (ampm === 'PM' && h !== 12) h += 12;
+    timeStr = `${String(h).padStart(2, '0')}:${m}:${s}`;
+  }
+
+  // Normalize HH:MM (no seconds) to HH:MM:SS
+  if (/^\d{1,2}:\d{2}$/.test(timeStr)) timeStr += ':00';
+
   let d = new Date(`${dateStr}T${timeStr || '00:00:00'}`);
   if (!isNaN(d)) return d;
 
+  // Handle DD-Mon-YYYY or Mon-DD-YYYY (e.g. "29-Mar-2026", "29-MAR-26")
+  const MON = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+  const monMatch = dateStr.match(/^(\d{1,2})[\/\-\s]([A-Za-z]{3,})[\/\-\s](\d{2,4})$/);
+  if (monMatch) {
+    const monNum = MON[monMatch[2].slice(0,3).toLowerCase()];
+    if (monNum) {
+      const day = parseInt(monMatch[1], 10);
+      const yr  = parseInt(monMatch[3], 10);
+      const iso = `${yr < 100 ? 2000 + yr : yr}-${String(monNum).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      d = new Date(`${iso}T${timeStr || '00:00:00'}`);
+      if (!isNaN(d)) return d;
+    }
+  }
+
   const parts = dateStr.split(/[\/\-\.]/);
   if (parts.length === 3) {
-    let [a, b, c] = parts.map(Number);
-    let iso;
-    if (a > 12) iso = `${c < 100 ? 2000 + c : c}-${String(b).padStart(2, '0')}-${String(a).padStart(2, '0')}`;
-    else        iso = `${c < 100 ? 2000 + c : c}-${String(a).padStart(2, '0')}-${String(b).padStart(2, '0')}`;
-    d = new Date(`${iso}T${timeStr || '00:00:00'}`);
-    if (!isNaN(d)) return d;
+    const raw = parts.map(Number);
+    if (!raw.some(isNaN)) {
+      let [a, b, c] = raw;
+      let iso;
+      if (a > 31)      iso = `${a}-${String(b).padStart(2,'0')}-${String(c).padStart(2,'0')}`;      // YYYY/MM/DD
+      else if (a > 12) iso = `${c < 100 ? 2000+c : c}-${String(b).padStart(2,'0')}-${String(a).padStart(2,'0')}`;  // DD/MM/YYYY
+      else             iso = `${c < 100 ? 2000+c : c}-${String(a).padStart(2,'0')}-${String(b).padStart(2,'0')}`;  // MM/DD/YYYY
+      d = new Date(`${iso}T${timeStr || '00:00:00'}`);
+      if (!isNaN(d)) return d;
+    }
   }
   return null;
 }
@@ -145,21 +185,25 @@ function avgArr(arr) {
 
 function fmtTime(sec) {
   if (sec == null || isNaN(sec)) return '—';
-  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
-  return `${m}m ${String(s).padStart(2, '0')}s`;
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return `${h}h ${String(m).padStart(2, '0')}m`;
 }
 
 // ─── ROW PROCESSOR ────────────────────────────────────────────────────────────
+function getRowAgentName(row) {
+  return (row['SALESMAN_ID'] || row['SALES_USER_FIRST'] || row['LOGISTICS_USER_FIRST'] || row['LOGISTICS_USER_LAST'] || row['DELIVERY_USER'] || row['ACTIVATION_USER'] || '').trim();
+}
+
 function processRows(rows) {
   const agentMap = {};
 
   rows.forEach(row => {
-    const agent = (row['SALES_USER_FIRST'] || '').trim();
+    const agent = getRowAgentName(row);
     if (!agent) return;
 
     if (!agentMap[agent]) agentMap[agent] = { name: agent, orders: [] };
 
-    const orderDT   = parseDateTime(row['ORDER_CREATION_DATE'], row['ORDER_CREATION_time']);
+    const orderDT   = parseDateTime(row['ORDER_CREATION_DATE_TIME1'] || row['ORDER_CREATION_DATE'], row['ORDER_CREATION_time']);
     const claimDT   = parseDateTime(row['SALES_CLAIM_DATE_FIRST'], row['SALES_CLAIM_TIME_FIRST']);
     const assignDT  = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
 
@@ -184,6 +228,7 @@ function processRows(rows) {
     const assignTimes = a.orders.map(o => o.assignTimeSec).filter(v => v != null && v >= 0 && v < 86400);
     return {
       name:          a.name,
+      role:          a.name,
       initials:      a.name.split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase(),
       total:         a.orders.length,
       claimed:       a.orders.filter(o => o.claimed).length,
@@ -526,6 +571,327 @@ function SuccessSection({ result, onNewImport }) {
   );
 }
 
+function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRetry, newAgentCode, newDisplayName, newAgentType, newAgentError, onNewAgentCode, onNewDisplayName, onNewAgentType, onAdd, onUpdate, onBulkUpdate }) {
+  const [search, setSearch]         = useState('');
+  const [localNames, setLocalNames] = useState({});
+  const [savedRows, setSavedRows]   = useState({});
+  const [filterType, setFilterType] = useState('all');
+
+  const combined = useMemo(() => {
+    const map = {};
+    (parsedAgents || []).forEach(agent => {
+      map[agent.agentCode] = { ...agent, displayName: agent.displayName || '', visible: agent.visible !== false, agentType: agent.agentType || 'sales', source: 'report' };
+    });
+    (mappings || []).forEach(mapping => {
+      if (!mapping || !mapping.agentCode) return;
+      const inReport = !!map[mapping.agentCode];
+      map[mapping.agentCode] = {
+        ...map[mapping.agentCode],
+        agentCode:   mapping.agentCode,
+        displayName: mapping.displayName || '',
+        visible:     mapping.visible !== false,
+        agentType:   mapping.agentType || 'sales',
+        source:      inReport ? 'report' : 'saved',
+      };
+    });
+    return Object.values(map).sort((a, b) => a.agentCode.localeCompare(b.agentCode));
+  }, [mappings, parsedAgents]);
+
+  // Seed localNames for new agents without overwriting in-progress edits
+  useEffect(() => {
+    setLocalNames(prev => {
+      const next = { ...prev };
+      combined.forEach(m => { if (!(m.agentCode in next)) next[m.agentCode] = m.displayName; });
+      return next;
+    });
+  }, [combined]);
+
+  const filtered = useMemo(() => {
+    let result = combined;
+    if (filterType !== 'all') {
+      result = result.filter(m => (m.agentType || 'sales') === filterType);
+    }
+    if (!search.trim()) return result;
+    const q = search.toLowerCase();
+    return result.filter(m =>
+      m.agentCode.toLowerCase().includes(q) ||
+      (localNames[m.agentCode] || m.displayName || '').toLowerCase().includes(q)
+    );
+  }, [combined, search, localNames, filterType]);
+
+  const totalVisible = combined.filter(m => m.visible !== false).length;
+  const totalHidden  = combined.length - totalVisible;
+  const totalSales   = combined.filter(m => (m.agentType || 'sales') === 'sales').length;
+  const totalActivation = combined.filter(m => (m.agentType || 'sales') === 'activation').length;
+  const totalLogistics = combined.filter(m => (m.agentType || 'sales') === 'logistics').length;
+
+  function flashSaved(code) {
+    setSavedRows(prev => ({ ...prev, [code]: true }));
+    setTimeout(() => setSavedRows(prev => { const n = { ...prev }; delete n[code]; return n; }), 2000);
+  }
+
+  function handleNameBlur(mapping) {
+    const newVal = (localNames[mapping.agentCode] ?? mapping.displayName).trim();
+    if (newVal !== mapping.displayName) {
+      onUpdate(mapping, 'displayName', newVal);
+      flashSaved(mapping.agentCode);
+    }
+  }
+
+  function handleToggle(mapping, checked) {
+    onUpdate(mapping, 'visible', checked);
+    flashSaved(mapping.agentCode);
+  }
+
+  function handleTypeChange(mapping, newType) {
+    onUpdate(mapping, 'agentType', newType);
+    flashSaved(mapping.agentCode);
+  }
+
+  function handleShowAll() {
+    const items = combined
+      .filter(m => m.visible === false)
+      .map(m => ({ agentCode: m.agentCode, displayName: localNames[m.agentCode] ?? m.displayName, visible: true, agentType: m.agentType || 'sales' }));
+    if (items.length) onBulkUpdate(items);
+  }
+
+  function handleHideAll() {
+    const items = combined
+      .filter(m => m.visible !== false)
+      .map(m => ({ agentCode: m.agentCode, displayName: localNames[m.agentCode] ?? m.displayName, visible: false, agentType: m.agentType || 'sales' }));
+    if (items.length) onBulkUpdate(items);
+  }
+
+  return (
+    <div className="section-card">
+      {/* Header */}
+      <div className="section-card-head">
+        <div>
+          <div className="section-card-title">Agent Mappings</div>
+          <div className="section-card-sub">Agents are auto-loaded from the parsed report. Set display names, agent type (Sales/Activation), and choose which appear on dashboards.</div>
+        </div>
+        {combined.length > 0 && (
+          <div className="mapping-stats">
+            <span className="mapping-stat"><span className="mapping-stat-val">{combined.length}</span> total</span>
+            <span className="mapping-stat-sep" />
+            <span className="mapping-stat mapping-stat-on"><span className="mapping-stat-val">{totalVisible}</span> visible</span>
+            <span className="mapping-stat-sep" />
+            <span className="mapping-stat mapping-stat-off"><span className="mapping-stat-val">{totalHidden}</span> hidden</span>
+            <span className="mapping-stat-sep" />
+            <span className="mapping-stat"><span className="mapping-stat-val">{totalSales}</span> sales</span>
+            <span className="mapping-stat-sep" />
+            <span className="mapping-stat"><span className="mapping-stat-val">{totalActivation}</span> activation</span>
+            <span className="mapping-stat-sep" />
+            <span className="mapping-stat"><span className="mapping-stat-val">{totalLogistics}</span> logistics</span>
+          </div>
+        )}
+      </div>
+
+      {/* Add agent form */}
+      <div className="mapping-add-form">
+        <div className="mapping-add-label">Add agent manually</div>
+        <div className="mapping-add-row">
+          <div className="mapping-add-field">
+            <label>Agent code</label>
+            <input
+              type="text"
+              placeholder="e.g. BF01711"
+              value={newAgentCode}
+              onChange={(e) => onNewAgentCode(e.target.value)}
+            />
+          </div>
+          <div className="mapping-add-field">
+            <label>Display name</label>
+            <input
+              type="text"
+              placeholder="e.g. John Smith"
+              value={newDisplayName}
+              onChange={(e) => onNewDisplayName(e.target.value)}
+            />
+          </div>
+          <div className="mapping-add-field" style={{ minWidth: '120px' }}>
+            <label>Agent type</label>
+            <select
+              value={newAgentType}
+              onChange={(e) => onNewAgentType(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'rgba(216, 245, 236, 0.05)',
+                border: '1px solid rgba(216, 245, 236, 0.13)',
+                borderRadius: '8px',
+                padding: '9px 12px',
+                fontSize: '13px',
+                color: 'var(--mint)',
+                outline: 'none',
+                fontFamily: 'inherit',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="sales">Sales</option>
+              <option value="activation">Activation</option>
+              <option value="logistics">Logistics</option>
+            </select>
+          </div>
+          <button className="btn btn-primary mapping-add-btn" onClick={onAdd}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Add
+          </button>
+        </div>
+        {newAgentError && <div className="form-error">{newAgentError}</div>}
+      </div>
+
+      <div className="mapping-divider" />
+
+      {/* Toolbar */}
+      <div className="mapping-toolbar">
+        <div className="mapping-search-wrap">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            type="text"
+            className="mapping-search"
+            placeholder="Search agents…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            style={{
+              background: 'rgba(216, 245, 236, 0.05)',
+              border: '1px solid rgba(216, 245, 236, 0.13)',
+              borderRadius: '8px',
+              padding: '7px 12px',
+              fontSize: '13px',
+              color: 'var(--mint)',
+              outline: 'none',
+              fontFamily: 'inherit',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="all">All Types</option>
+            <option value="sales">Sales Only</option>
+            <option value="activation">Activation Only</option>
+            <option value="logistics">Logistics Only</option>
+          </select>
+          <div className="mapping-bulk-btns">
+            <button className="btn-ghost" onClick={handleShowAll}>Show all</button>
+            <button className="btn-ghost" onClick={handleHideAll}>Hide all</button>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="loading-state" style={{ minHeight: 'unset', padding: '32px 0' }}>
+          <div className="spinner-sm" aria-hidden="true" />
+          <p>Loading mappings…</p>
+        </div>
+      ) : loadError ? (
+        <div className="mapping-load-error">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div>
+            <div className="mapping-load-error-msg">{loadError}</div>
+            <button className="mapping-retry-btn" onClick={onRetry}>Retry</button>
+          </div>
+        </div>
+      ) : (
+        <div className="mapping-table-wrap">
+          <table className="mapping-table">
+            <thead>
+              <tr>
+                <th>Agent code</th>
+                <th>Display name</th>
+                <th>Type</th>
+                <th>Source</th>
+                <th>Show on dashboard</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-dim)' }}>
+                    {search ? 'No agents match your search.' : 'No agent codes found. Import a CSV to auto-populate agents.'}
+                  </td>
+                </tr>
+              ) : filtered.map(mapping => (
+                <tr key={mapping.agentCode} className={savedRows[mapping.agentCode] ? 'mapping-row-saved' : ''}>
+                  <td><span className="mapping-code">{mapping.agentCode}</span></td>
+                  <td>
+                    <input
+                      className="mapping-name-input"
+                      type="text"
+                      value={localNames[mapping.agentCode] ?? mapping.displayName}
+                      placeholder="Enter display name…"
+                      onChange={(e) => setLocalNames(prev => ({ ...prev, [mapping.agentCode]: e.target.value }))}
+                      onBlur={() => handleNameBlur(mapping)}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      value={mapping.agentType || 'sales'}
+                      onChange={(e) => handleTypeChange(mapping, e.target.value)}
+                      style={{
+                        background: 'rgba(216, 245, 236, 0.05)',
+                        border: '1px solid rgba(216, 245, 236, 0.13)',
+                        borderRadius: '6px',
+                        padding: '5px 8px',
+                        fontSize: '12px',
+                        color: 'var(--mint)',
+                        outline: 'none',
+                        fontFamily: 'inherit',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <option value="sales">Sales</option>
+                      <option value="activation">Activation</option>
+                      <option value="logistics">Logistics</option>
+                    </select>
+                  </td>
+                  <td>
+                    <span className={`source-badge source-${mapping.source}`}>
+                      {mapping.source === 'report' ? 'Report' : 'Manual'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="mapping-toggle-cell">
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={mapping.visible !== false}
+                          onChange={(e) => handleToggle(mapping, e.target.checked)}
+                        />
+                        <span className="toggle-slider" />
+                      </label>
+                      {savedRows[mapping.agentCode] && (
+                        <span className="mapping-saved-chip">Saved</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filtered.length > 0 && (
+            <div className="mapping-table-footer">
+              Showing {filtered.length} of {combined.length} {combined.length === 1 ? 'agent' : 'agents'}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HistorySection({ history }) {
   return (
     <div className="section-card">
@@ -573,6 +939,232 @@ function HistorySection({ history }) {
   );
 }
 
+function DangerZone({ onClearData, clearing, clearProgress }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (clearing) {
+    return (
+      <div className="danger-zone">
+        <div className="danger-zone-head">
+          <div className="danger-zone-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <div>
+            <div className="danger-zone-title">Clearing data…</div>
+            <div className="danger-zone-sub">{clearProgress.label}</div>
+          </div>
+        </div>
+        <div className="progress-wrap" style={{ marginTop: '16px' }}>
+          <div className="progress-track">
+            <div className="progress-fill danger-fill" style={{ width: `${clearProgress.pct}%` }} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="danger-zone">
+      <div className="danger-zone-head">
+        <div className="danger-zone-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </div>
+        <div>
+          <div className="danger-zone-title">Danger Zone</div>
+          <div className="danger-zone-sub">These actions permanently delete data and cannot be undone.</div>
+        </div>
+      </div>
+
+      <div className="danger-action">
+        <div className="danger-action-info">
+          <div className="danger-action-name">Clear all imported data</div>
+          <div className="danger-action-desc">
+            Deletes every import and its order records from Firestore.
+            Agent mappings are kept. Dashboards will revert to demo mode.
+          </div>
+        </div>
+        {!confirming ? (
+          <button className="btn-danger" onClick={() => setConfirming(true)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
+              <path d="M9 6V4h6v2"/>
+            </svg>
+            Clear data
+          </button>
+        ) : (
+          <div className="danger-confirm">
+            <span className="danger-confirm-msg">This cannot be undone.</span>
+            <button
+              className="btn-danger-confirm"
+              onClick={() => { setConfirming(false); onClearData(); }}
+            >
+              Yes, delete everything
+            </button>
+            <button className="btn-ghost" onClick={() => setConfirming(false)}>Cancel</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── SLA SETTINGS COMPONENT ───────────────────────────────────────────────────
+function SLASection({ slaSettings, setSlaSettings, onSave, saving }) {
+  const departments = [
+    { key: 'sales', label: 'Sales', icon: '💼', color: '#7B3FA0', startFrom: 'Order Creation' },
+    { key: 'logistics', label: 'Logistics', icon: '🚚', color: '#E67E22', startFrom: 'Logistics Assignment' },
+    { key: 'activation', label: 'Activation', icon: '⚡', color: '#2ECC8A', startFrom: 'Logistics Assignment' },
+  ];
+
+  function formatWorkingHours(deptKey) {
+    const config = WORKING_HOURS[deptKey];
+    const start = config.start;
+    const end = config.end;
+    const startStr = start <= 12 ? `${start} AM` : `${start - 12} PM`;
+    const endStr = end <= 12 ? `${end} AM` : `${end - 12} PM`;
+    return `${startStr} - ${endStr}`;
+  }
+
+  function handleChange(dept, type, value) {
+    const numValue = parseInt(value) || 0;
+    setSlaSettings(prev => ({
+      ...prev,
+      [dept]: {
+        ...prev[dept],
+        [type]: numValue,
+      },
+    }));
+  }
+
+  return (
+    <div className="section-card">
+      <div className="section-card-head">
+        <div>
+          <div className="section-card-title">SLA Settings</div>
+          <div className="section-card-sub">Set target times for each department. Times exceeding SLA will be shown in red on dashboards.</div>
+        </div>
+      </div>
+
+      <div className="sla-grid">
+        {departments.map(dept => (
+          <div key={dept.key} className="sla-card" style={{ borderColor: `${dept.color}40` }}>
+            <div className="sla-card-header" style={{ background: `${dept.color}15` }}>
+              <span className="sla-icon">{dept.icon}</span>
+              <span className="sla-dept-name" style={{ color: dept.color }}>{dept.label}</span>
+            </div>
+            <div className="sla-card-body">
+              <div className="sla-info-row">
+                <span className="sla-info-label">Working Hours:</span>
+                <span className="sla-info-value">{formatWorkingHours(dept.key)}</span>
+              </div>
+              <div className="sla-info-row">
+                <span className="sla-info-label">SLA Start:</span>
+                <span className="sla-info-value">{dept.startFrom}</span>
+              </div>
+              <div className="sla-divider" />
+              <div className="sla-input-group">
+                <label>Working Hours Orders</label>
+                <div className="sla-time-input">
+                  <input
+                    type="number"
+                    min="0"
+                    max="23"
+                    value={Math.floor((slaSettings[dept.key]?.workingHours || 0) / 60)}
+                    onChange={(e) => {
+                      const hours = parseInt(e.target.value) || 0;
+                      const mins = (slaSettings[dept.key]?.workingHours || 0) % 60;
+                      handleChange(dept.key, 'workingHours', hours * 60 + mins);
+                    }}
+                  />
+                  <span>h</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="59"
+                    value={(slaSettings[dept.key]?.workingHours || 0) % 60}
+                    onChange={(e) => {
+                      const hours = Math.floor((slaSettings[dept.key]?.workingHours || 0) / 60);
+                      const mins = parseInt(e.target.value) || 0;
+                      handleChange(dept.key, 'workingHours', hours * 60 + mins);
+                    }}
+                  />
+                  <span>m</span>
+                </div>
+              </div>
+              <div className="sla-input-group">
+                <label>Non-Working Hours Orders</label>
+                <div className="sla-time-input">
+                  <input
+                    type="number"
+                    min="0"
+                    max="23"
+                    value={Math.floor((slaSettings[dept.key]?.nonWorkingHours || 0) / 60)}
+                    onChange={(e) => {
+                      const hours = parseInt(e.target.value) || 0;
+                      const mins = (slaSettings[dept.key]?.nonWorkingHours || 0) % 60;
+                      handleChange(dept.key, 'nonWorkingHours', hours * 60 + mins);
+                    }}
+                  />
+                  <span>h</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="59"
+                    value={(slaSettings[dept.key]?.nonWorkingHours || 0) % 60}
+                    onChange={(e) => {
+                      const hours = Math.floor((slaSettings[dept.key]?.nonWorkingHours || 0) / 60);
+                      const mins = parseInt(e.target.value) || 0;
+                      handleChange(dept.key, 'nonWorkingHours', hours * 60 + mins);
+                    }}
+                  />
+                  <span>m</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="sla-actions">
+        <button 
+          className="btn btn-primary" 
+          onClick={onSave}
+          disabled={saving}
+        >
+          {saving ? (
+            <>
+              <div className="spinner-sm" style={{ width: 16, height: 16, borderWidth: 2 }} />
+              Saving…
+            </>
+          ) : (
+            <>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+              Save SLA Settings
+            </>
+          )}
+        </button>
+      </div>
+
+      <div className="sla-note">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="16" x2="12" y2="12"/>
+          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+        <span>Times are displayed in hours and minutes. Default is 2 hours (120 minutes). Times exceeding SLA will appear in <span style={{ color: '#E74C3C', fontWeight: 600 }}>red</span> on performance dashboards.</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN PAGE ─────────────────────────────────────────────────────────────────
 export default function Admin() {
   const [step, setStep] = useState(1);
@@ -585,13 +1177,76 @@ export default function Admin() {
   const [importProgress, setImportProgress] = useState({ pct: 0, label: '', show: false });
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [importError, setImportError]   = useState('');
   const [history, setHistory] = useState([]);
+  const [agentMappings, setAgentMappings] = useState([]);
+  const [mappingLoading, setMappingLoading] = useState(false);
+  const [newAgentCode, setNewAgentCode] = useState('');
+  const [newDisplayName, setNewDisplayName] = useState('');
+  const [newAgentType, setNewAgentType] = useState('sales');
+  const [mappingError, setMappingError]       = useState('');
+  const [mappingLoadError, setMappingLoadError] = useState('');
+  const [activeTab, setActiveTab] = useState('import');
+  const [clearing, setClearing]           = useState(false);
+  const [clearProgress, setClearProgress] = useState({ pct: 0, label: '' });
+
+  // SLA Settings state
+  const [slaSettings, setSlaSettings] = useState({
+    sales: { workingHours: 120, nonWorkingHours: 120 },      // 2 hours = 120 minutes
+    logistics: { workingHours: 120, nonWorkingHours: 120 },
+    activation: { workingHours: 120, nonWorkingHours: 120 },
+  });
+  const [slaLoading, setSlaLoading] = useState(false);
+  const [slaSaving, setSlaSaving] = useState(false);
+
+  const parsedAgents = useMemo(() => {
+    const map = {};
+    parsedRows.forEach(row => {
+      const code = getRowAgentName(row);
+      if (!code) return;
+      if (!map[code]) map[code] = { agentCode: code, displayName: '', visible: true, source: 'report' };
+    });
+    return Object.values(map).sort((a, b) => a.agentCode.localeCompare(b.agentCode));
+  }, [parsedRows]);
 
   useEffect(() => {
     loadHistory();
+    loadMappings();
+    loadSLASettings();
     // Update data source pill
     localStorage.setItem('tpw_data_source', 'live');
   }, []);
+
+  async function loadSLASettings() {
+    try {
+      const slaDoc = await getDocs(query(collection(db, 'slaSettings'), limit(1)));
+      if (!slaDoc.empty) {
+        const data = slaDoc.docs[0].data();
+        setSlaSettings({
+          sales: data.sales || { workingHours: 120, nonWorkingHours: 120 },
+          logistics: data.logistics || { workingHours: 120, nonWorkingHours: 120 },
+          activation: data.activation || { workingHours: 120, nonWorkingHours: 120 },
+        });
+      }
+    } catch (err) {
+      console.error('Error loading SLA settings:', err);
+      // Keep defaults on error
+    }
+  }
+
+  async function saveSLASettings() {
+    setSlaSaving(true);
+    try {
+      const slaRef = doc(db, 'slaSettings', 'default');
+      await setDoc(slaRef, slaSettings);
+      alert('SLA settings saved successfully!');
+    } catch (err) {
+      console.error('Error saving SLA settings:', err);
+      alert('Failed to save SLA settings: ' + err.message);
+    } finally {
+      setSlaSaving(false);
+    }
+  }
 
   async function loadHistory() {
     try {
@@ -601,6 +1256,176 @@ export default function Admin() {
     } catch (err) {
       console.error('Error loading history:', err);
     }
+  }
+
+  async function loadMappings() {
+    setMappingLoading(true);
+    setMappingLoadError('');
+    try {
+      const q = query(collection(db, 'agentMappings'), orderBy('agentCode', 'asc'));
+      const snap = await getDocs(q);
+      setAgentMappings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('Error loading agent mappings:', err);
+      const isQuota = err?.code === 'resource-exhausted';
+      setMappingLoadError(
+        isQuota
+          ? 'Firestore quota exceeded. Your data is safe — please try again in a few minutes.'
+          : `Failed to load mappings: ${err.message}`
+      );
+    } finally {
+      setMappingLoading(false);
+    }
+  }
+
+  async function saveMapping(agentCode, displayName, visible, agentType = 'sales') {
+    const code = (agentCode || '').trim().toUpperCase();
+    if (!code) return;
+    const data = { agentCode: code, displayName: (displayName || '').trim(), visible: visible !== false, agentType };
+    await setDoc(doc(db, 'agentMappings', code), data);
+    // Optimistic update — avoids a full collection re-read after every single save
+    setAgentMappings(prev => {
+      const idx = prev.findIndex(m => m.agentCode === code);
+      if (idx >= 0) { const next = [...prev]; next[idx] = { ...next[idx], ...data }; return next; }
+      return [...prev, data];
+    });
+  }
+
+  async function handleBulkUpdate(items) {
+    if (!items.length) return;
+    const batch = writeBatch(db);
+    items.forEach(({ agentCode, displayName, visible, agentType }) => {
+      const code = (agentCode || '').trim().toUpperCase();
+      if (!code) return;
+      batch.set(doc(db, 'agentMappings', code), {
+        agentCode:   code,
+        displayName: (displayName || '').trim(),
+        visible:     visible !== false,
+        agentType:   agentType || 'sales',
+      });
+    });
+    await batch.commit();
+    await loadMappings(); // Single re-fetch after the entire batch
+  }
+
+  // Helper: delay function
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  async function handleClearData() {
+    setClearing(true);
+    setClearProgress({ pct: 5, label: 'Fetching imports…' });
+    
+    // Initial cooldown to let pending operations settle
+    await delay(1000);
+    
+    try {
+      const importsSnap = await getDocs(collection(db, 'imports'));
+      const importDocs  = importsSnap.docs;
+
+      if (importDocs.length === 0) {
+        setHistory([]);
+        localStorage.setItem('tpw_data_source', 'demo');
+        setClearing(false);
+        return;
+      }
+
+      // Blaze plan: large batches with small delays between
+      const BATCH_SIZE = 500; // Firestore batch limit
+      const BATCH_DELAY = 100; // 100ms between batches to avoid rate limits
+      const MAX_RETRIES = 3;
+
+      for (let i = 0; i < importDocs.length; i++) {
+        const importDoc  = importDocs[i];
+        const ordersSnap = await getDocs(collection(db, 'imports', importDoc.id, 'orders'));
+        const orderDocs = ordersSnap.docs;
+
+        // Delete orders in max-size batches with small delays
+        for (let j = 0; j < orderDocs.length; j += BATCH_SIZE) {
+          const batch = writeBatch(db);
+          orderDocs.slice(j, j + BATCH_SIZE).forEach(d => batch.delete(d.ref));
+          
+          // Retry with exponential backoff on rate limit errors
+          let retries = 0;
+          while (retries < MAX_RETRIES) {
+            try {
+              await batch.commit();
+              break;
+            } catch (err) {
+              if (err?.code === 'resource-exhausted' && retries < MAX_RETRIES - 1) {
+                retries++;
+                await delay(1000 * Math.pow(2, retries)); // 2s, 4s, 8s
+              } else {
+                throw err;
+              }
+            }
+          }
+          
+          // Small delay between batches to prevent burst rate limiting
+          if (j + BATCH_SIZE < orderDocs.length) {
+            await delay(BATCH_DELAY);
+          }
+        }
+
+        // Delete the import document itself
+        const batch = writeBatch(db);
+        batch.delete(importDoc.ref);
+        let retries = 0;
+        while (retries < MAX_RETRIES) {
+          try {
+            await batch.commit();
+            break;
+          } catch (err) {
+            if (err?.code === 'resource-exhausted' && retries < MAX_RETRIES - 1) {
+              retries++;
+              await delay(1000 * Math.pow(2, retries));
+            } else {
+              throw err;
+            }
+          }
+        }
+
+        // Delay between imports
+        if (i < importDocs.length - 1) {
+          await delay(BATCH_DELAY);
+        }
+
+        const pct = Math.round(10 + ((i + 1) / importDocs.length) * 88);
+        setClearProgress({ pct, label: `Deleted import ${i + 1} of ${importDocs.length} (${orderDocs.length} orders)…` });
+      }
+
+      setClearProgress({ pct: 100, label: 'Done!' });
+      setHistory([]);
+      setImportResult(null);
+      setStep(1);
+      localStorage.setItem('tpw_data_source', 'demo');
+    } catch (err) {
+      console.error('Clear error:', err);
+      alert('Error clearing data: ' + err.message);
+    } finally {
+      setClearing(false);
+      setClearProgress({ pct: 0, label: '' });
+    }
+  }
+
+  async function handleAddMapping() {
+    const code = newAgentCode.trim().toUpperCase();
+    if (!code) {
+      setMappingError('Agent code is required');
+      return;
+    }
+    setMappingError('');
+    await saveMapping(code, newDisplayName, true, newAgentType);
+    setNewAgentCode('');
+    setNewDisplayName('');
+    setNewAgentType('sales');
+  }
+
+  async function handleUpdateMapping(mapping, field, value) {
+    const updated = {
+      ...mapping,
+      [field]: field === 'visible' ? value : value,
+    };
+    await saveMapping(updated.agentCode, updated.displayName, updated.visible, updated.agentType || 'sales');
   }
 
   function handleFile(f) {
@@ -664,29 +1489,60 @@ export default function Admin() {
 
       const importId = importRef.id;
 
-      // Build orders array
+      // Build sales orders array (full journey data)
       const orders = parsedRows.map(row => {
-        const orderDT  = parseDateTime(row['ORDER_CREATION_DATE'], row['ORDER_CREATION_time']);
+        const orderDT  = parseDateTime(row['ORDER_CREATION_DATE_TIME1'] || row['ORDER_CREATION_DATE'], row['ORDER_CREATION_time']);
         const claimDT  = parseDateTime(row['SALES_CLAIM_DATE_FIRST'], row['SALES_CLAIM_TIME_FIRST']);
-        const assignDT = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
+        const logisticsAssignDT = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
+        const logisticsClaimDT  = parseDateTime(row['LOGISTICS_CLAIM_DATE_FIRST'], row['LOGISTICS_CLAIM_TIME_FIRST']);
+        const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
+        
         return {
           orderNo:      row['CHANNEL_ORDER_NO'] || '',
-          agentName:    row['SALES_USER_FIRST'] || '',
+          agentName:    getRowAgentName(row),
           channel:      row['CHANNEL'] || '',
           status:       row['ESHOP_ORDER_STATUS'] || '',
           hoursType:    row['HOURS_TYPE'] || '',
           orderDT:      orderDT ? Timestamp.fromDate(orderDT) : null,
+          claimDT:      claimDT ? Timestamp.fromDate(claimDT) : null,
+          logisticsAssignDT: logisticsAssignDT ? Timestamp.fromDate(logisticsAssignDT) : null,
+          logisticsClaimDT: logisticsClaimDT ? Timestamp.fromDate(logisticsClaimDT) : null,
+          activationAssignDT: activationAssignDT ? Timestamp.fromDate(activationAssignDT) : null,
           claimed:      !!claimDT,
           claimTimeSec: diffSeconds(orderDT, claimDT),
-          assignTimeSec: diffSeconds(claimDT, assignDT),
+          logisticsAssignTimeSec: diffSeconds(claimDT, logisticsAssignDT),
+          logisticsClaimTimeSec: diffSeconds(logisticsAssignDT, logisticsClaimDT),
+          activationAssignTimeSec: diffSeconds(logisticsClaimDT, activationAssignDT),
         };
       });
 
-      // Batch write in chunks of 400
-      const CHUNK = 400;
+      // Build logistics orders array
+      const logisticsOrders = parsedRows.map(row => {
+        const assignDT  = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
+        const claimDT   = parseDateTime(row['LOGISTICS_CLAIM_DATE_FIRST'], row['LOGISTICS_CLAIM_TIME_FIRST']);
+        const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
+        return {
+          orderNo:      row['CHANNEL_ORDER_NO'] || '',
+          agentName:    row['LOGISTICS_USER_FIRST'] || row['LOGISTICS_USER_LAST'] || '',
+          channel:      row['CHANNEL'] || '',
+          status:       row['ESHOP_ORDER_STATUS'] || '',
+          assignDT:     assignDT ? Timestamp.fromDate(assignDT) : null,
+          claimDT:      claimDT ? Timestamp.fromDate(claimDT) : null,
+          activationAssignDT: activationAssignDT ? Timestamp.fromDate(activationAssignDT) : null,
+          claimed:      !!claimDT,
+          claimTimeSec: diffSeconds(assignDT, claimDT),
+          activationAssignTimeSec: diffSeconds(claimDT, activationAssignDT),
+        };
+      }).filter(o => o.agentName); // Only include orders with a logistics agent
+
+      // Batch write with Blaze plan optimizations
+      const CHUNK = 500;        // Firestore batch limit
+      const BATCH_DELAY = 100;  // 100ms between batches
+      const MAX_RETRIES = 3;
       const total = orders.length;
       let done = 0;
 
+      // Write sales orders
       for (let i = 0; i < orders.length; i += CHUNK) {
         const chunk = orders.slice(i, i + CHUNK);
         const batch = writeBatch(db);
@@ -694,10 +1550,70 @@ export default function Admin() {
           const ref = doc(collection(db, 'imports', importId, 'orders'));
           batch.set(ref, order);
         });
-        await batch.commit();
+        
+        // Retry with exponential backoff on rate limit errors
+        let retries = 0;
+        while (retries < MAX_RETRIES) {
+          try {
+            await batch.commit();
+            break;
+          } catch (err) {
+            if (err?.code === 'resource-exhausted' && retries < MAX_RETRIES - 1) {
+              retries++;
+              setImportProgress({ pct: Math.round(10 + (done / total) * 35), label: `Writing sales orders… ${done.toLocaleString()} / ${total.toLocaleString()} (Retry ${retries})`, show: true });
+              await delay(1000 * Math.pow(2, retries)); // 2s, 4s, 8s
+            } else {
+              throw err;
+            }
+          }
+        }
+        
         done += chunk.length;
-        const pct = Math.round(20 + (done / total) * 75);
-        setImportProgress({ pct, label: `Writing orders… ${done.toLocaleString()} / ${total.toLocaleString()}`, show: true });
+        const pct = Math.round(10 + (done / total) * 35);
+        setImportProgress({ pct, label: `Writing sales orders… ${done.toLocaleString()} / ${total.toLocaleString()}`, show: true });
+        
+        // Small delay between batches to prevent burst rate limiting
+        if (i + CHUNK < orders.length) {
+          await delay(BATCH_DELAY);
+        }
+      }
+
+      // Write logistics orders
+      const logisticsTotal = logisticsOrders.length;
+      let logisticsDone = 0;
+
+      for (let i = 0; i < logisticsOrders.length; i += CHUNK) {
+        const chunk = logisticsOrders.slice(i, i + CHUNK);
+        const batch = writeBatch(db);
+        chunk.forEach(order => {
+          const ref = doc(collection(db, 'imports', importId, 'logisticsOrders'));
+          batch.set(ref, order);
+        });
+        
+        // Retry with exponential backoff on rate limit errors
+        let retries = 0;
+        while (retries < MAX_RETRIES) {
+          try {
+            await batch.commit();
+            break;
+          } catch (err) {
+            if (err?.code === 'resource-exhausted' && retries < MAX_RETRIES - 1) {
+              retries++;
+              setImportProgress({ pct: Math.round(45 + (logisticsDone / logisticsTotal) * 35), label: `Writing logistics orders… ${logisticsDone.toLocaleString()} / ${logisticsTotal.toLocaleString()} (Retry ${retries})`, show: true });
+              await delay(1000 * Math.pow(2, retries));
+            } else {
+              throw err;
+            }
+          }
+        }
+        
+        logisticsDone += chunk.length;
+        const pct = Math.round(45 + (logisticsDone / logisticsTotal) * 35);
+        setImportProgress({ pct, label: `Writing logistics orders… ${logisticsDone.toLocaleString()} / ${logisticsTotal.toLocaleString()}`, show: true });
+        
+        if (i + CHUNK < logisticsOrders.length) {
+          await delay(BATCH_DELAY);
+        }
       }
 
       setImportProgress({ pct: 100, label: 'Import complete!', show: true });
@@ -716,6 +1632,54 @@ export default function Admin() {
 
       setStep(4);
       await loadHistory();
+      
+      // Save agent mappings from this import to Firestore
+      setImportProgress({ pct: 100, label: 'Saving agent mappings…', show: true });
+      try {
+        let batch = writeBatch(db);
+        let batchCount = 0;
+        let batchesCommitted = 0;
+        
+        for (const agent of agents) {
+          const code = agent.name.trim().toUpperCase();
+          if (!code) continue;
+          
+          const ref = doc(db, 'agentMappings', code);
+          batch.set(ref, {
+            agentCode: code,
+            displayName: '',
+            visible: true,
+            agentType: 'sales',
+          }, { merge: true });
+          
+          batchCount++;
+          
+          // Commit when we hit the batch limit
+          if (batchCount >= 400) {
+            await batch.commit();
+            batchesCommitted++;
+            // Create new batch after commit
+            batch = writeBatch(db);
+            batchCount = 0;
+            // Small delay between mapping batches
+            if (batchesCommitted % 5 === 0) {
+              await delay(100);
+            }
+          }
+        }
+        
+        if (batchCount > 0) {
+          await batch.commit();
+        }
+        
+        // Reload mappings to show the newly saved agents
+        await loadMappings();
+      } catch (mappingErr) {
+        console.error('Error saving agent mappings:', mappingErr);
+        // Don't fail the import if mappings fail to save
+      }
+      
+      setImportProgress({ pct: 100, label: 'Import complete!', show: true });
     } catch (err) {
       console.error('Import error:', err);
       alert('Import failed: ' + err.message);
@@ -746,39 +1710,106 @@ export default function Admin() {
           <p>Upload and parse your CSV export to power all performance dashboards</p>
         </div>
 
-        <StepsBar step={step} />
+        <div className="tab-bar">
+          <button
+            className={`tab-btn${activeTab === 'import' ? ' active' : ''}`}
+            onClick={() => setActiveTab('import')}
+          >
+            Import CSV
+          </button>
+          <button
+            className={`tab-btn${activeTab === 'mappings' ? ' active' : ''}`}
+            onClick={() => {
+              setActiveTab('mappings');
+              // Refresh mappings when switching to this tab
+              loadMappings();
+            }}
+          >
+            Agent Mappings
+          </button>
+          <button
+            className={`tab-btn${activeTab === 'sla' ? ' active' : ''}`}
+            onClick={() => {
+              setActiveTab('sla');
+              loadSLASettings();
+            }}
+          >
+            SLA Settings
+          </button>
+        </div>
 
-        <UploadCard
-          onFile={handleFile}
-          file={file}
-          fileName={fileName}
-          fileMeta={fileMeta}
-          onRemove={handleRemove}
-          progress={importProgress}
-        />
+        {activeTab === 'import' && (
+          <>
+            <StepsBar step={step} />
 
-        {step >= 2 && parsedHeaders.length > 0 && (
-          <ValidationSection headers={parsedHeaders} parsedRows={parsedRows} />
+            <UploadCard
+              onFile={handleFile}
+              file={file}
+              fileName={fileName}
+              fileMeta={fileMeta}
+              onRemove={handleRemove}
+              progress={importProgress}
+            />
+
+            {step >= 2 && parsedHeaders.length > 0 && (
+              <ValidationSection headers={parsedHeaders} parsedRows={parsedRows} />
+            )}
+
+            {step >= 3 && parsedRows.length > 0 && (
+              <PreviewSection rows={parsedRows} headers={parsedHeaders} total={parsedRows.length} />
+            )}
+
+            {step >= 3 && !importResult && (
+              <ImportBar
+                rowCount={parsedRows.length}
+                onImport={doImport}
+                importing={importing}
+                progress={importProgress}
+              />
+            )}
+
+            {importResult && (
+              <SuccessSection result={importResult} onNewImport={handleNewImport} />
+            )}
+
+            <HistorySection history={history} />
+
+            <DangerZone
+              onClearData={handleClearData}
+              clearing={clearing}
+              clearProgress={clearProgress}
+            />
+          </>
         )}
-
-        {step >= 3 && parsedRows.length > 0 && (
-          <PreviewSection rows={parsedRows} headers={parsedHeaders} total={parsedRows.length} />
-        )}
-
-        {step >= 3 && !importResult && (
-          <ImportBar
-            rowCount={parsedRows.length}
-            onImport={doImport}
-            importing={importing}
-            progress={importProgress}
+        
+        {activeTab === 'mappings' && (
+          <AgentMappingsSection
+            mappings={agentMappings}
+            parsedAgents={parsedAgents}
+            loading={mappingLoading}
+            loadError={mappingLoadError}
+            onRetry={loadMappings}
+            newAgentCode={newAgentCode}
+            newDisplayName={newDisplayName}
+            newAgentType={newAgentType}
+            newAgentError={mappingError}
+            onNewAgentCode={setNewAgentCode}
+            onNewDisplayName={setNewDisplayName}
+            onNewAgentType={setNewAgentType}
+            onAdd={handleAddMapping}
+            onUpdate={handleUpdateMapping}
+            onBulkUpdate={handleBulkUpdate}
           />
         )}
-
-        {importResult && (
-          <SuccessSection result={importResult} onNewImport={handleNewImport} />
+        
+        {activeTab === 'sla' && (
+          <SLASection
+            slaSettings={slaSettings}
+            setSlaSettings={setSlaSettings}
+            onSave={saveSLASettings}
+            saving={slaSaving}
+          />
         )}
-
-        <HistorySection history={history} />
       </div>
     </>
   );
