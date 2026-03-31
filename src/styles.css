@@ -217,6 +217,27 @@ body {
   -webkit-backdrop-filter: blur(14px);
 }
 
+.section-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.section-card-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--mint);
+  margin-bottom: 4px;
+}
+
+.section-card-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 .section-header {
   display: flex;
   align-items: center;

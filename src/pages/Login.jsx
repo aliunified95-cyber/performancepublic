@@ -41,7 +41,7 @@ export default function Login() {
   const [error, setError] = useState('');
 
   if (user) {
-    return <Navigate to="/performance" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
   async function handleSubmit(e) {
@@ -68,7 +68,7 @@ export default function Login() {
       } else {
         await createUserWithEmailAndPassword(auth, email.trim(), password);
       }
-      navigate('/performance');
+      navigate('/dashboard');
     } catch (err) {
       setError(mapFirebaseError(err.code));
     } finally {

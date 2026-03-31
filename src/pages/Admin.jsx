@@ -1510,6 +1510,7 @@ export default function Admin() {
           activationAssignDT: activationAssignDT ? Timestamp.fromDate(activationAssignDT) : null,
           claimed:      !!claimDT,
           claimTimeSec: diffSeconds(orderDT, claimDT),
+          assignTimeSec: diffSeconds(claimDT, logisticsAssignDT), // Time from claim to logistics assignment (for sales dashboard)
           logisticsAssignTimeSec: diffSeconds(claimDT, logisticsAssignDT),
           logisticsClaimTimeSec: diffSeconds(logisticsAssignDT, logisticsClaimDT),
           activationAssignTimeSec: diffSeconds(logisticsClaimDT, activationAssignDT),
@@ -1636,6 +1637,16 @@ export default function Admin() {
       // Save agent mappings from this import to Firestore
       setImportProgress({ pct: 100, label: 'Saving agent mappings…', show: true });
       try {
+        // First, load existing mappings to check which ones already exist
+        const existingMappingsSnap = await getDocs(collection(db, 'agentMappings'));
+        const existingMappings = {};
+        existingMappingsSnap.docs.forEach(d => {
+          const data = d.data();
+          if (data.agentCode) {
+            existingMappings[data.agentCode.toUpperCase()] = data;
+          }
+        });
+        
         let batch = writeBatch(db);
         let batchCount = 0;
         let batchesCommitted = 0;
@@ -1645,25 +1656,31 @@ export default function Admin() {
           if (!code) continue;
           
           const ref = doc(db, 'agentMappings', code);
-          batch.set(ref, {
-            agentCode: code,
-            displayName: '',
-            visible: true,
-            agentType: 'sales',
-          }, { merge: true });
+          const existing = existingMappings[code];
           
-          batchCount++;
-          
-          // Commit when we hit the batch limit
-          if (batchCount >= 400) {
-            await batch.commit();
-            batchesCommitted++;
-            // Create new batch after commit
-            batch = writeBatch(db);
-            batchCount = 0;
-            // Small delay between mapping batches
-            if (batchesCommitted % 5 === 0) {
-              await delay(100);
+          // Only create new mapping if it doesn't exist
+          // If it exists, preserve all existing settings (visible, agentType, displayName)
+          if (!existing) {
+            batch.set(ref, {
+              agentCode: code,
+              displayName: '',
+              visible: true,
+              agentType: 'sales',
+            });
+            
+            batchCount++;
+            
+            // Commit when we hit the batch limit
+            if (batchCount >= 400) {
+              await batch.commit();
+              batchesCommitted++;
+              // Create new batch after commit
+              batch = writeBatch(db);
+              batchCount = 0;
+              // Small delay between mapping batches
+              if (batchesCommitted % 5 === 0) {
+                await delay(100);
+              }
             }
           }
         }

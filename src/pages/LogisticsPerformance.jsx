@@ -42,6 +42,9 @@ const FILTER_LABELS = {
 
 const ROWS_PER_PAGE = 1000;
 
+// Default SLA: 2 hours = 7200 seconds
+const DEFAULT_SLA_SECONDS = 7200;
+
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
 function fmtTime(sec) {
   if (!sec || isNaN(sec)) return '0m 00s';

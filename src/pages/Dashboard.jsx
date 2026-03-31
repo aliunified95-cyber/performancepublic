@@ -116,7 +116,8 @@ function JourneyStage({
   conversionRate,
   subtitle,
   slaExceeded,
-  slaMinutes
+  slaMinutes,
+  showSLA = true
 }) {
   // Check if SLA is exceeded
   const displayColor = slaExceeded ? '#E74C3C' : color;
@@ -136,7 +137,7 @@ function JourneyStage({
       <div className="stage-content">
         <div className="stage-title">{title}</div>
         <div className="stage-avg-main" style={{ color: displayColor }}>{avgTime > 0 ? fmtTime(avgTime) : '—'}</div>
-        {slaExceeded && (
+        {showSLA && slaExceeded && (
           <div className="stage-sla-warning">SLA Exceeded</div>
         )}
         <div className="stage-count-sub">{count.toLocaleString()} orders</div>

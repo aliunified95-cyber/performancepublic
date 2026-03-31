@@ -456,6 +456,11 @@ export default function ActivationPerformance() {
       });
 
       setAllOrders(orders);
+      
+      // Load agent mappings for dashboard display/hide settings
+      const mappingsSnap = await getDocs(query(collection(db, 'agentMappings'), orderBy('agentCode', 'asc')));
+      setAgentMappings(mappingsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      
       setLoadState('loaded');
       localStorage.setItem('tpw_data_source', 'live');
     } catch (err) {
@@ -499,6 +504,11 @@ export default function ActivationPerformance() {
       agentMap[name].orders.push(o);
     });
 
+    const mappingMap = agentMappings.reduce((acc, m) => {
+      if (m && m.agentCode) acc[m.agentCode] = m;
+      return acc;
+    }, {});
+
     return Object.values(agentMap).map((a, idx) => {
       const initials = a.name.split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase();
       const color    = COLORS[idx % COLORS.length];
@@ -512,9 +522,12 @@ export default function ActivationPerformance() {
         .map(o => o.handleTimeSec)
         .filter(v => v != null && v >= 0 && v < 86400);
 
+      const mapping = mappingMap[a.name];
+      const visible = mapping ? mapping.visible !== false : true;
+
       return {
         name: a.name,
-        role: 'Activation Agent',
+        role: mapping?.displayName || 'Activation Agent',
         initials,
         color,
         total:         a.orders.length,
@@ -524,8 +537,9 @@ export default function ActivationPerformance() {
         handleTimeSec: Math.round(avg(handleTimes)),
         status:        'active',
         trend:         'neutral',
+        visible,
       };
-    }).filter(a => a.total > 0).sort((a, b) => b.total - a.total);
+    }).filter(a => a.total > 0 && a.visible).sort((a, b) => b.total - a.total);
   }, [loadState, allOrders, currentRange, customDates]);
 
   function handleSort(col) {
