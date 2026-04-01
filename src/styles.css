@@ -397,6 +397,22 @@ body {
 .pill-offline { background: rgba(216, 245, 236, 0.06); color: var(--text-dim); }
 .pill-offline::before { background: rgba(216, 245, 236, 0.25); }
 
+.status-claimed   { background: rgba(46,204,138,0.12); color: #2ecc8a; }
+.status-claimed::before   { background: #2ecc8a; }
+.status-unclaimed { background: rgba(255,99,99,0.12); color: #ff6363; }
+.status-unclaimed::before { background: #ff6363; }
+
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(99,130,255,0.12);
+  color: #6382ff;
+  margin-right: 3px;
+}
+
 /* ─── FILTER BAR ─────────────────────────────────────────────────────────────── */
 .filter-bar {
   display: flex;
@@ -2795,6 +2811,10 @@ td {
   }
 }
 
+/* ─── PRINT-ONLY ELEMENTS (hidden in normal view) ───────────────────────────── */
+.print-generated,
+.print-footer { display: none; }
+
 /* ─── PDF BUTTON ─────────────────────────────────────────────────────────────── */
 .pdf-btn {
   display: inline-flex;
@@ -2829,194 +2849,294 @@ td {
 /* ─── PRINT / SAVE AS PDF ────────────────────────────────────────────────────── */
 @media print {
   @page {
-    margin: 5mm 6mm;
     size: A4 landscape;
+    margin: 8mm 10mm;
   }
 
-  html {
-    zoom: 0.65;
-  }
+  html { zoom: 0.76; }
 
-  * {
+  *, *::before, *::after {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    animation: none !important;
+    transition: none !important;
   }
 
-  /* Override CSS variables so all var(--mint) / var(--text-dim) etc. resolve to dark print colours */
   :root {
-    --mint:      #1a1a1a !important;
-    --text-dim:  #555555 !important;
-    --text-mid:  #333333 !important;
+    --mint:      #111827 !important;
+    --text-dim:  #6b7280 !important;
+    --text-mid:  #374151 !important;
     --card-bg:   #ffffff !important;
-    --border:    #dddddd !important;
+    --border:    #e5e7eb !important;
     --evergreen: #ffffff !important;
+    --emerald:   #059669 !important;
+    --amethyst:  #7c3aed !important;
   }
 
   body {
-    background: #fff !important;
-    color: #1a1a1a !important;
-    font-size: 11px !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+    font-family: 'Segoe UI', system-ui, -apple-system, Arial, sans-serif !important;
   }
 
-  /* Remove blur effects that prevent table content from rendering in print */
-  .table-wrap,
-  .hero-badge,
-  .nav {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-
-  /* Hide UI chrome */
+  /* ── HIDE UI CHROME ── */
   .nav,
   .filter-bar,
   .pdf-btn,
-  .table-footer .pagination { display: none !important; }
+  .search-wrap,
+  .table-footer,
+  .modal-backdrop,
+  .agent-detail-modal { display: none !important; }
 
-  .page { padding: 0 !important; }
+  /* ── PAGE ── */
+  .page {
+    padding: 0 !important;
+    background: transparent !important;
+    max-width: 100% !important;
+  }
 
-  /* Page header */
+  /* ── PRINT HEADER ── */
   .page-header {
-    margin-bottom: 16px !important;
-    padding-bottom: 12px !important;
-    border-bottom: 1px solid #ccc !important;
+    display: flex !important;
+    align-items: flex-end !important;
+    justify-content: space-between !important;
+    padding: 0 0 10px 0 !important;
+    margin-bottom: 14px !important;
+    border-bottom: 3px solid #111827 !important;
+    page-break-inside: avoid !important;
+    page-break-after: avoid !important;
   }
-  .page-header h1 { color: #1a1a1a !important; font-size: 18px !important; }
-  .page-header p  { color: #555 !important; }
 
-  /* Hero badge */
+  .page-header h1 {
+    font-size: 22px !important;
+    font-weight: 700 !important;
+    color: #111827 !important;
+    margin: 0 0 4px 0 !important;
+    letter-spacing: -0.5px !important;
+    line-height: 1.2 !important;
+  }
+
+  /* Green accent dot before title */
+  .page-header h1::before {
+    content: '';
+    display: inline-block !important;
+    width: 10px !important;
+    height: 10px !important;
+    background: #059669 !important;
+    border-radius: 50% !important;
+    margin-right: 10px !important;
+    vertical-align: middle !important;
+    margin-bottom: 2px !important;
+  }
+
+  .page-header p {
+    font-size: 11px !important;
+    color: #6b7280 !important;
+    margin: 0 !important;
+    font-weight: 400 !important;
+  }
+
+  /* Generated-at block (right side of header) */
+  .print-generated {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-end !important;
+    font-size: 10px !important;
+    color: #9ca3af !important;
+    line-height: 1.7 !important;
+    text-align: right !important;
+  }
+
+  .print-generated strong {
+    color: #374151 !important;
+    font-size: 10px !important;
+  }
+
+  /* ── HERO BADGE / KPI SECTION ── */
   .hero-badge {
-    background: #f3f9f6 !important;
-    border: 1px solid #c5ddd5 !important;
-    color: #1a1a1a !important;
-    margin-bottom: 16px !important;
+    background: #f9fafb !important;
+    border: 1px solid #e5e7eb !important;
+    border-left: 4px solid #059669 !important;
+    border-radius: 8px !important;
+    padding: 10px 16px !important;
+    margin-bottom: 14px !important;
+    color: #111827 !important;
+    page-break-inside: avoid !important;
+    page-break-after: avoid !important;
   }
-  .hero-badge-label,
-  .hero-badge-title { color: #1a1a1a !important; }
-  .dot { background: #2ECC8A !important; }
-  .hero-kpi-value,
-  .hero-kpi-label  { color: #1a1a1a !important; }
-  .hero-kpi-badge  { color: #555 !important; background: #eee !important; }
 
-  /* Journey stages (Dashboard) */
-  .journey-stage   { border: 1px solid #ddd !important; background: #fafafa !important; }
-  .dash-handling-card { border: 1px solid #ddd !important; background: #fafafa !important; }
-  .dash-handling-label, .dash-handling-sub { color: #555 !important; }
-  .stage-title,
-  .stage-count-sub,
-  .stage-subtitle,
-  .stage-avg-main  { color: #1a1a1a !important; }
+  .hero-badge-label {
+    font-size: 9px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1.5px !important;
+    text-transform: uppercase !important;
+    color: #059669 !important;
+    margin-bottom: 2px !important;
+  }
 
-  /* Dashboard hero banner: all elements in one line */
+  .hero-badge-title {
+    font-size: 11px !important;
+    color: #374151 !important;
+    margin-bottom: 10px !important;
+  }
+
+  .dot { background: #059669 !important; }
+
+  .hero-kpi-value { color: #111827 !important; font-size: 20px !important; font-weight: 700 !important; }
+  .hero-kpi-label { color: #6b7280 !important; font-size: 9px !important; }
+  .hero-kpi-badge { background: #f3f4f6 !important; color: #374151 !important; font-size: 9px !important; }
+
+  /* ── JOURNEY STAGES (Dashboard page) ── */
   .dashboard-hero {
     display: flex !important;
     flex-wrap: wrap !important;
-    gap: 12px !important;
-    padding: 16px !important;
+    gap: 10px !important;
+    padding: 12px 16px !important;
+    align-items: stretch !important;
   }
+
   .dashboard-hero .hero-badge-label,
   .dashboard-hero .hero-badge-title {
     width: 100% !important;
     margin-bottom: 4px !important;
   }
-  .dashboard-hero .journey-stages {
+
+  .journey-stages {
     display: flex !important;
     flex: 3 !important;
     gap: 8px !important;
   }
-  .dashboard-hero .journey-stage {
-    flex: 1 !important;
-    padding: 10px 8px !important;
-    border-radius: 8px !important;
-  }
-  .dashboard-hero .stage-header { margin-bottom: 8px !important; }
-  .dashboard-hero .stage-icon-wrap {
-    width: 36px !important;
-    height: 36px !important;
-    border-radius: 8px !important;
-  }
-  .dashboard-hero .stage-icon svg {
-    width: 18px !important;
-    height: 18px !important;
-  }
-  .dashboard-hero .stage-connector { margin-right: -8px !important; }
-  .dashboard-hero .stage-title { font-size: 9px !important; margin-bottom: 4px !important; }
-  .dashboard-hero .stage-avg-main { font-size: 18px !important; margin-bottom: 2px !important; }
-  .dashboard-hero .stage-count-sub { font-size: 10px !important; margin-bottom: 4px !important; }
-  .dashboard-hero .stage-subtitle { font-size: 9px !important; margin-bottom: 0 !important; }
 
-  .dashboard-hero .dash-handling-section {
-    flex: 4 !important;
-    margin-top: 0 !important;
-    padding-top: 0 !important;
-    border-top: none !important;
-  }
-  .dashboard-hero .dash-handling-header { display: none !important; }
-  .dashboard-hero .dash-handling-row {
-    display: flex !important;
-    gap: 8px !important;
-  }
-  .dashboard-hero .dash-handling-card {
+  .journey-stage {
     flex: 1 !important;
-    padding: 10px 8px !important;
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
     border-radius: 8px !important;
+    padding: 10px !important;
+    page-break-inside: avoid !important;
   }
-  .dashboard-hero .dash-handling-label { font-size: 9px !important; margin-bottom: 4px !important; }
-  .dashboard-hero .dash-handling-time { font-size: 18px !important; }
-  .dashboard-hero .dash-handling-sub { font-size: 9px !important; }
 
-  .total-journey-card { background: #f3f9f6 !important; border: 1px solid #c5ddd5 !important; }
+  .stage-title {
+    font-size: 9px !important;
+    color: #6b7280 !important;
+    margin-bottom: 4px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+  }
+
+  .stage-count-sub { font-size: 10px !important; color: #374151 !important; margin-bottom: 4px !important; }
+  .stage-avg-main  { font-size: 20px !important; font-weight: 700 !important; color: #111827 !important; margin-bottom: 2px !important; }
+  .stage-subtitle  { font-size: 9px !important; color: #9ca3af !important; }
+  .stage-connector { display: none !important; }
+  .stage-header    { margin-bottom: 8px !important; }
+  .stage-icon-wrap { width: 30px !important; height: 30px !important; border-radius: 6px !important; margin-bottom: 8px !important; }
+  .stage-icon svg  { width: 16px !important; height: 16px !important; }
+
+  .dash-handling-section { flex: 4 !important; margin-top: 0 !important; padding-top: 0 !important; border-top: none !important; }
+  .dash-handling-header  { display: none !important; }
+  .dash-handling-row     { display: flex !important; gap: 8px !important; height: 100% !important; }
+
+  .dash-handling-card {
+    flex: 1 !important;
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    padding: 10px !important;
+  }
+
+  .dash-handling-label { font-size: 9px !important; color: #6b7280 !important; text-transform: uppercase !important; letter-spacing: 0.5px !important; margin-bottom: 4px !important; }
+  .dash-handling-time  { font-size: 20px !important; font-weight: 700 !important; color: #111827 !important; }
+  .dash-handling-sub   { font-size: 9px !important; color: #9ca3af !important; }
+
+  .total-journey-card     { background: #f0fdf4 !important; border: 1px solid #bbf7d0 !important; border-radius: 8px !important; }
   .total-journey-title,
   .total-journey-subtitle,
   .total-journey-avg,
-  .total-journey-note { color: #1a1a1a !important; }
+  .total-journey-note     { color: #111827 !important; }
 
-  /* Table */
-  .section-header { margin-bottom: 8px !important; }
-  .section-title  { color: #1a1a1a !important; }
-  .section-sub    { color: #555 !important; }
-  .search-wrap    { display: none !important; }
+  /* ── SECTION HEADER ── */
+  .section-header { margin-bottom: 8px !important; page-break-after: avoid !important; }
+  .section-title  { font-size: 13px !important; font-weight: 600 !important; color: #111827 !important; }
+  .section-sub    { font-size: 10px !important; color: #6b7280 !important; }
 
+  /* ── TABLE ── */
   .table-wrap {
     overflow: visible !important;
-    background: #fff !important;
-    border: 1px solid #ddd !important;
-    border-radius: 6px !important;
-    box-shadow: none !important;
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    page-break-inside: auto !important;
   }
 
   table { width: 100% !important; border-collapse: collapse !important; }
-  thead { background: #f5f5f5 !important; }
-  th    {
-    color: #333 !important;
-    background: #f0f0f0 !important;
-    border-bottom: 2px solid #ccc !important;
-    padding: 6px 8px !important;
-    font-size: 10px !important;
+
+  thead { background: #111827 !important; }
+
+  th {
+    background: #111827 !important;
+    color: #ffffff !important;
+    font-size: 9px !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.8px !important;
+    padding: 8px 12px !important;
+    border: none !important;
   }
+
+  th:first-child { padding-left: 16px !important; border-radius: 8px 0 0 0 !important; }
+  th:last-child  { border-radius: 0 8px 0 0 !important; }
+  td:first-child { padding-left: 16px !important; }
+
   td {
-    color: #1a1a1a !important;
-    border-bottom: 1px solid #eee !important;
-    padding: 5px 8px !important;
+    color: #111827 !important;
     font-size: 10px !important;
+    padding: 6px 12px !important;
+    border-bottom: 1px solid #f3f4f6 !important;
+    vertical-align: middle !important;
   }
+
+  tbody tr:nth-child(even) td { background: #f9fafb !important; }
   tr { page-break-inside: avoid !important; }
 
-  .agent-avatar { width: 26px !important; height: 26px !important; font-size: 9px !important; }
-  .agent-name   { color: #1a1a1a !important; font-size: 10px !important; }
-  .agent-role   { color: #555 !important; display: block !important; font-size: 9px !important; }
+  /* Agent cell */
+  .agent-avatar { width: 26px !important; height: 26px !important; font-size: 9px !important; border-radius: 50% !important; flex-shrink: 0 !important; }
+  .agent-name   { font-size: 10px !important; font-weight: 600 !important; color: #111827 !important; }
+  .agent-role   { font-size: 8px !important; color: #6b7280 !important; display: block !important; }
 
-  .mini-bar-track { background: #e0e0e0 !important; }
+  .mini-bar-track { background: #e5e7eb !important; height: 3px !important; border-radius: 2px !important; }
+  .mini-bar-fill  { height: 3px !important; border-radius: 2px !important; }
 
-  .status-pill  { border: 1px solid #ccc !important; font-size: 9px !important; }
-  .pill-active  { background: #d4f4e8 !important; color: #1a6e40 !important; }
-  .pill-away    { background: #fff3cd !important; color: #856404 !important; }
-  .pill-offline { background: #f0f0f0 !important; color: #666 !important; }
+  .num-cell { font-variant-numeric: tabular-nums !important; color: #111827 !important; }
 
-  .trend-up   { color: #1a6e40 !important; }
-  .trend-down { color: #c0392b !important; }
-  .trend-neu  { color: #666 !important; }
+  .status-pill  { font-size: 8px !important; padding: 2px 6px !important; border-radius: 20px !important; border: none !important; }
+  .pill-active  { background: #d1fae5 !important; color: #065f46 !important; }
+  .pill-away    { background: #fef3c7 !important; color: #92400e !important; }
+  .pill-offline { background: #f3f4f6 !important; color: #6b7280 !important; }
 
-  .table-footer { display: none !important; }
+  .trend-up   { color: #059669 !important; }
+  .trend-down { color: #dc2626 !important; }
+  .trend-neu  { color: #6b7280 !important; }
 
-  .num-cell { color: #1a1a1a !important; }
+  .sla-bar-wrap { display: none !important; }
+
+  /* ── PRINT FOOTER ── */
+  .print-footer {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    margin-top: 16px !important;
+    padding-top: 8px !important;
+    border-top: 1px solid #e5e7eb !important;
+    font-size: 8px !important;
+    color: #9ca3af !important;
+  }
+
+  .print-footer-sig {
+    font-weight: 500 !important;
+    color: #6b7280 !important;
+  }
 }

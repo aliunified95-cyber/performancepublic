@@ -1296,6 +1296,8 @@ export default function Admin() {
   const [mappingError, setMappingError]       = useState('');
   const [mappingLoadError, setMappingLoadError] = useState('');
   const [activeTab, setActiveTab] = useState('import');
+  const [emailHistory, setEmailHistory]     = useState([]);
+  const [emailHistoryLoading, setEmailHistoryLoading] = useState(false);
   const [clearing, setClearing]           = useState(false);
   const [clearProgress, setClearProgress] = useState({ pct: 0, label: '' });
 
@@ -1368,6 +1370,19 @@ export default function Admin() {
       setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (err) {
       console.error('Error loading history:', err);
+    }
+  }
+
+  async function loadEmailHistory() {
+    setEmailHistoryLoading(true);
+    try {
+      const q = query(collection(db, 'emailHistory'), orderBy('sentAt', 'desc'), limit(50));
+      const snap = await getDocs(q);
+      setEmailHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error('Error loading email history:', err);
+    } finally {
+      setEmailHistoryLoading(false);
     }
   }
 
@@ -1907,6 +1922,15 @@ export default function Admin() {
           >
             SLA Settings
           </button>
+          <button
+            className={`tab-btn${activeTab === 'emails' ? ' active' : ''}`}
+            onClick={() => {
+              setActiveTab('emails');
+              loadEmailHistory();
+            }}
+          >
+            Email History
+          </button>
         </div>
 
         {activeTab === 'import' && (
@@ -1980,6 +2004,65 @@ export default function Admin() {
             onSave={saveSLASettings}
             saving={slaSaving}
           />
+        )}
+
+        {activeTab === 'emails' && (
+          <div className="section-card">
+            <div className="section-card-header">
+              <div className="section-card-title">Email History</div>
+              <div className="section-card-sub">Automated performance reports sent to recipients</div>
+            </div>
+            {emailHistoryLoading ? (
+              <div className="section-empty">Loading...</div>
+            ) : emailHistory.length === 0 ? (
+              <div className="section-empty">No emails sent yet — emails are sent 5 minutes after each daily import.</div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Sent At</th>
+                    <th>Date Range</th>
+                    <th>Orders</th>
+                    <th>Reports</th>
+                    <th>Recipients</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {emailHistory.map(item => {
+                    const ts = item.sentAt?.toDate ? item.sentAt.toDate() : new Date(item.sentAt);
+                    const allRecipients = [
+                      ...(item.recipients?.sales      || []),
+                      ...(item.recipients?.logistics  || []),
+                      ...(item.recipients?.activation || []),
+                      ...(item.recipients?.management || []),
+                    ];
+                    const uniqueRecipients = [...new Set(allRecipients)];
+                    return (
+                      <tr key={item.id}>
+                        <td>{ts.toLocaleString('en-GB')}</td>
+                        <td>{item.dateRange || '—'}</td>
+                        <td>{item.rowCount?.toLocaleString() || '—'}</td>
+                        <td>
+                          {(item.reports || []).map(r => (
+                            <span key={r} className="badge">{r}</span>
+                          ))}
+                        </td>
+                        <td style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
+                          {uniqueRecipients.join(', ')}
+                        </td>
+                        <td>
+                          <span className={`status-pill ${item.status === 'sent' ? 'status-claimed' : 'status-unclaimed'}`}>
+                            {item.status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
         )}
       </div>
     </>

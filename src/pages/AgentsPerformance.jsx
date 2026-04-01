@@ -606,6 +606,10 @@ export default function AgentsPerformance() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+                <span className="print-generated">
+                  <strong>Sales Agents Performance</strong>
+                  Generated: {new Date().toLocaleString('en-GB')}
+                </span>
                 <button className="pdf-btn" onClick={() => window.print()}>
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -685,6 +689,12 @@ export default function AgentsPerformance() {
               agent={selectedAgent}
               teamType="sales"
             />
+
+            <div className="print-footer">
+              <span>Team Performance System</span>
+              <span>{label}</span>
+              <span className="print-footer-sig">Automated report developed by Ali Isa Mohsen 36030791</span>
+            </div>
           </>
         )}
       </div>

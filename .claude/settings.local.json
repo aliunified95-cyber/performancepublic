@@ -6,7 +6,11 @@
       "Bash(firebase --version)",
       "Bash(node createUser.mjs)",
       "Bash(curl:*)",
-      "Bash(xargs ls:*)"
+      "Bash(xargs ls:*)",
+      "Bash(firebase functions:list --project performer-2df35)",
+      "Bash(firebase functions:list --project performer-2df35 --json)",
+      "Bash(python -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(f['uri']\\) for f in data if 'uri' in f]\")",
+      "Bash(firebase deploy:*)"
     ]
   }
 }
