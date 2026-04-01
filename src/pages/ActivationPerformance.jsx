@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import Navbar from '../components/Navbar';
+import AgentDetailModal from '../components/AgentDetailModal';
 
 // ─── COLORS ────────────────────────────────────────────────────────────────────
 const COLORS = [
@@ -16,28 +17,11 @@ const COLORS = [
   '#C0392B','#2980B9','#27AE60','#D35400','#E91E8C',
 ];
 
-// ─── DEMO DATA ─────────────────────────────────────────────────────────────────
-const DEMO_AGENTS = [
-  { name:'Ahmed Hassan',     role:'Activation Lead',  initials:'AH', color:COLORS[0],  total:145, claimed:138, completed:128, claimTimeSec:185, handleTimeSec:520,  status:'active',  trend:'up' },
-  { name:'Maria Garcia',     role:'Activation Agent', initials:'MG', color:COLORS[1],  total:132, claimed:125, completed:115, claimTimeSec:210, handleTimeSec:680,  status:'active',  trend:'up' },
-  { name:'John Smith',       role:'Activation Agent', initials:'JS', color:COLORS[2],  total:128, claimed:120, completed:108, claimTimeSec:245, handleTimeSec:720,  status:'active',  trend:'neutral' },
-  { name:'Fatima Al-Rashid', role:'Senior Activator', initials:'FA', color:COLORS[3],  total:118, claimed:115, completed:112, claimTimeSec:165, handleTimeSec:480,  status:'active',  trend:'up' },
-  { name:'David Chen',       role:'Activation Agent', initials:'DC', color:COLORS[4],  total:115, claimed:108, completed:98,  claimTimeSec:280, handleTimeSec:850,  status:'away',    trend:'down' },
-  { name:'Sarah Johnson',    role:'Activation Agent', initials:'SJ', color:COLORS[5],  total:108, claimed:95,  completed:88,  claimTimeSec:320, handleTimeSec:920,  status:'active',  trend:'down' },
-  { name:'Michael Brown',    role:'Junior Activator', initials:'MB', color:COLORS[6],  total:95,  claimed:82,  completed:72,  claimTimeSec:380, handleTimeSec:1150, status:'offline', trend:'neutral' },
-  { name:'Emma Wilson',      role:'Activation Agent', initials:'EW', color:COLORS[7],  total:102, claimed:98,  completed:94,  claimTimeSec:195, handleTimeSec:560,  status:'active',  trend:'up' },
-  { name:'Omar Farouk',      role:'Activation Agent', initials:'OF', color:COLORS[8],  total:88,  claimed:85,  completed:80,  claimTimeSec:225, handleTimeSec:640,  status:'active',  trend:'up' },
-  { name:'Lisa Anderson',    role:'Activation Agent', initials:'LA', color:COLORS[9],  total:92,  claimed:88,  completed:82,  claimTimeSec:240, handleTimeSec:690,  status:'away',    trend:'neutral' },
-];
-
-const DEMO_MULTIPLIERS = {
-  today: 0.035, yesterday: 0.033, week: 0.22,
-  month: 1, mtd: 0.70, quarter: 3.1, annual: 12.5,
-};
+// No demo data - only real imported data is displayed
 
 const FILTER_LABELS = {
   today:'Today', yesterday:'Yesterday', week:'This Week',
-  month:'This Month', mtd:'Month to Date', quarter:'This Quarter', annual:'This Year',
+  lastmonth:'Last Month', month:'This Month', mtd:'Month to Date', quarter:'This Quarter', annual:'This Year',
 };
 
 const ROWS_PER_PAGE = 1000;
@@ -47,9 +31,10 @@ const DEFAULT_SLA_SECONDS = 7200;
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
 function fmtTime(sec) {
-  if (!sec || isNaN(sec)) return '0m 00s';
-  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
-  return `${m}m ${String(s).padStart(2, '0')}s`;
+  if (!sec || isNaN(sec)) return '0h 00m';
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  return `${h}h ${String(m).padStart(2, '0')}m`;
 }
 
 function avg(arr) {
@@ -76,6 +61,7 @@ function getRangeBounds(range, customDates) {
   if (range === 'mtd')       return { from: new Date(y, mo, 1),                to: now };
   if (range === 'quarter')   return { from: new Date(y, Math.floor(mo / 3) * 3, 1), to: now };
   if (range === 'annual')    return { from: new Date(y, 0, 1),                 to: now };
+  if (range === 'lastmonth') return { from: new Date(y, mo - 1, 1, 0, 0, 0),  to: new Date(y, mo, 0, 23, 59, 59) };
   if (range === 'custom' && customDates.from && customDates.to) {
     return {
       from: new Date(customDates.from + 'T00:00:00'),
@@ -99,6 +85,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
   const totalOrders   = data.reduce((s, a) => s + a.total, 0);
   const totalClaimed  = data.reduce((s, a) => s + a.claimed, 0);
   const totalCompleted = data.reduce((s, a) => s + a.completed, 0);
+  const totalBadHandling = data.reduce((s, a) => s + (a.badHandlingCount || 0), 0);
   const avgClaim      = Math.round(avg(data.map(a => a.claimTimeSec)));
   const avgHandle     = Math.round(avg(data.map(a => a.handleTimeSec)));
   const completionRate = totalClaimed > 0 ? Math.round((totalCompleted / totalClaimed) * 100) : 0;
@@ -113,8 +100,8 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
     ? (importMeta?.filename || 'Imported Data')
     : 'Demo Data';
 
-  const cm = Math.floor(avgClaim / 60), cs = avgClaim % 60;
-  const hm = Math.floor(avgHandle / 60), hs = avgHandle % 60;
+  const ch = Math.floor(avgClaim / 3600),  cm = Math.round((avgClaim % 3600) / 60);
+  const hh = Math.floor(avgHandle / 3600), hm = Math.round((avgHandle % 3600) / 60);
 
   return (
     <div className="hero-badge">
@@ -126,7 +113,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
         All Agents · {label} · {src}
       </div>
 
-      <div className="hero-kpis" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+      <div className="hero-kpis" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
         {/* Total Assigned */}
         <div className="hero-kpi">
           <div className="hero-kpi-icon" style={{ background: 'rgba(46,204,138,0.18)' }}>
@@ -177,7 +164,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
             </svg>
           </div>
           <div className="hero-kpi-value" style={{ color: isSLAExceeded ? '#E74C3C' : 'inherit' }}>
-            {cm}<sup>m {String(cs).padStart(2, '0')}s</sup>
+            {ch}<sup>h {String(cm).padStart(2, '0')}m</sup>
           </div>
           <div className="hero-kpi-label">Avg Claim Time</div>
           <span className="hero-kpi-badge badge-neu" style={{ color: isSLAExceeded ? '#E74C3C' : 'inherit', background: isSLAExceeded ? 'rgba(231,76,60,0.12)' : '' }}>
@@ -194,17 +181,33 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
             </svg>
           </div>
           <div className="hero-kpi-value">
-            {hm}<sup>m {String(hs).padStart(2, '0')}s</sup>
+            {hh}<sup>h {String(hm).padStart(2, '0')}m</sup>
           </div>
           <div className="hero-kpi-label">Avg Handle Time</div>
           <span className="hero-kpi-badge badge-neu">claim→complete</span>
+        </div>
+
+        {/* Bad Handling Count */}
+        <div className="hero-kpi">
+          <div className="hero-kpi-icon" style={{ background: 'rgba(231,76,60,0.18)' }}>
+            <svg viewBox="0 0 24 24" style={{ stroke: '#E74C3C' }} aria-hidden="true">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          </div>
+          <div className="hero-kpi-value" style={{ color: totalBadHandling > 0 ? '#E74C3C' : 'inherit' }}>
+            {totalBadHandling.toLocaleString()}
+          </div>
+          <div className="hero-kpi-label">Bad Handling</div>
+          <span className="hero-kpi-badge badge-neu">&gt; 1000 min</span>
         </div>
       </div>
     </div>
   );
 }
 
-function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPage, slaMinutes }) {
+function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPage, slaMinutes, onAgentClick }) {
   const slaSeconds = (slaMinutes || 120) * 60;
   const query2 = searchQuery.toLowerCase();
   let filtered = data.filter(a =>
@@ -223,6 +226,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
     else if (col === 'completionRate') { av = a.completed / Math.max(1, a.claimed); bv = b.completed / Math.max(1, b.claimed); }
     else if (col === 'claimTime')   { av = a.claimTimeSec;  bv = b.claimTimeSec; }
     else if (col === 'handleTime')  { av = a.handleTimeSec; bv = b.handleTimeSec; }
+    else if (col === 'badHandling') { av = a.badHandlingCount || 0; bv = b.badHandlingCount || 0; }
     else { av = a.total; bv = b.total; }
     return dir === 'asc' ? av - bv : bv - av;
   });
@@ -240,6 +244,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
     { key: 'completionRate',  label: 'Completion Rate' },
     { key: 'claimTime',       label: 'Avg Claim Time' },
     { key: 'handleTime',      label: 'Avg Handle Time' },
+    { key: 'badHandling',     label: 'Bad Handling' },
     { key: 'status',          label: 'Status' },
     { key: 'trend',           label: 'Trend' },
   ];
@@ -291,7 +296,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
           <tbody>
             {paged.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
+                <td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
                   No agents found
                 </td>
               </tr>
@@ -307,12 +312,17 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
               return (
                 <tr key={agent.name + i}>
                   <td>
-                    <div className="agent-cell">
+                    <div 
+                      className="agent-cell" 
+                      onClick={() => onAgentClick(agent)}
+                      style={{ cursor: 'pointer' }}
+                      title="Click to view detailed breakdown"
+                    >
                       <div className="agent-avatar" style={{ background: agent.color }}>
                         {agent.initials}
                       </div>
                       <div>
-                        <div className="agent-name">{agent.name}</div>
+                        <div className="agent-name" style={{ color: '#3A7BD5' }}>{agent.name}</div>
                         <div className="agent-role">{agent.role || 'Activation Agent'}</div>
                       </div>
                     </div>
@@ -341,6 +351,15 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                     )}
                   </td>
                   <td className="num-cell">{fmtTime(agent.handleTimeSec)}</td>
+                  <td className="num-cell">
+                    {(agent.badHandlingCount || 0) > 0 ? (
+                      <span style={{ color: '#E74C3C', fontWeight: 600 }}>
+                        {agent.badHandlingCount}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-dim)' }}>0</span>
+                    )}
+                  </td>
                   <td>
                     <span className={`status-pill ${statusCls}`}>{statusLabel}</span>
                   </td>
@@ -398,12 +417,18 @@ export default function ActivationPerformance() {
   const [loadState, setLoadState]     = useState('loading');
   const [importMeta, setImportMeta]   = useState(null);
   const [allOrders, setAllOrders]     = useState([]);
-  const [currentRange, setCurrentRange] = useState('month');
-  const [customDates, setCustomDates] = useState({ from: '', to: '' });
+  const [agentMappings, setAgentMappings] = useState([]);
+  const [currentRange, setCurrentRange] = useState(() => localStorage.getItem('tpw_filter_range') || 'month');
+  const [customDates, setCustomDates] = useState(() => ({
+    from: localStorage.getItem('tpw_filter_from') || '',
+    to:   localStorage.getItem('tpw_filter_to')   || '',
+  }));
   const [searchQuery, setSearchQuery] = useState('');
   const [sortState, setSortState]     = useState({ col: 'total', dir: 'desc' });
   const [page, setPage]               = useState(1);
   const [slaSettings, setSlaSettings] = useState({ activation: { workingHours: DEFAULT_SLA_SECONDS / 60, nonWorkingHours: DEFAULT_SLA_SECONDS / 60 } });
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -427,6 +452,7 @@ export default function ActivationPerformance() {
   async function loadData() {
     setLoadState('loading');
     try {
+      // Check if there are any imports first
       const q    = query(collection(db, 'imports'), orderBy('importedAt', 'desc'), limit(1));
       const snap = await getDocs(q);
 
@@ -440,11 +466,12 @@ export default function ActivationPerformance() {
       const meta      = { id: docSnap.id, ...docSnap.data() };
       setImportMeta(meta);
 
-      // Load activation orders subcollection
+      // Load from global activationOrders collection (deduplicated across all imports)
+      // Limited to recent 30000 for performance with large datasets
       const ordersSnap = await getDocs(query(
-        collection(db, 'imports', docSnap.id, 'activationOrders'), 
+        collection(db, 'activationOrders'), 
         orderBy('assignDT', 'desc'), 
-        limit(5000)
+        limit(10000)
       ));
       
       const orders = ordersSnap.docs.map(d => {
@@ -452,8 +479,10 @@ export default function ActivationPerformance() {
         return {
           ...data,
           assignDT: data.assignDT?.toDate ? data.assignDT.toDate() : null,
+          effectiveAssignDT: data.effectiveAssignDT?.toDate ? data.effectiveAssignDT.toDate() : null,
+          claimDT: data.claimDT?.toDate ? data.claimDT.toDate() : null,
         };
-      });
+      }).filter(o => o.assignDT); // Only include orders with activation assignment
 
       setAllOrders(orders);
       
@@ -474,26 +503,18 @@ export default function ActivationPerformance() {
     if (loadState === 'loading') return [];
 
     if (loadState === 'demo' || loadState === 'error') {
-      const mult = currentRange === 'custom'
-        ? Math.max(1, customDates.from && customDates.to
-            ? (Math.round((new Date(customDates.to) - new Date(customDates.from)) / 86400000) + 1) / 30
-            : 1)
-        : (DEMO_MULTIPLIERS[currentRange] ?? 1);
-
-      return DEMO_AGENTS.map(a => ({
-        ...a,
-        total:         Math.max(0, Math.round(a.total * mult)),
-        claimed:       Math.max(0, Math.round(a.claimed * mult)),
-        completed:     Math.max(0, Math.round(a.completed * mult)),
-        claimTimeSec:  Math.round(a.claimTimeSec  * (0.88 + Math.random() * 0.24)),
-        handleTimeSec: Math.round(a.handleTimeSec * (0.88 + Math.random() * 0.24)),
-      }));
+      // No demo data - return empty array when no real data available
+      return [];
     }
 
     // Live data: aggregate from allOrders
+    // Use effectiveAssignDT for filtering (accounts for working hours adjustment)
     const bounds = getRangeBounds(currentRange, customDates);
     const filteredOrders = bounds
-      ? allOrders.filter(o => o.assignDT && o.assignDT >= bounds.from && o.assignDT <= bounds.to)
+      ? allOrders.filter(o => {
+          const filterDT = o.effectiveAssignDT || o.assignDT;
+          return filterDT && filterDT >= bounds.from && filterDT <= bounds.to;
+        })
       : allOrders;
 
     const agentMap = {};
@@ -505,24 +526,36 @@ export default function ActivationPerformance() {
     });
 
     const mappingMap = agentMappings.reduce((acc, m) => {
-      if (m && m.agentCode) acc[m.agentCode] = m;
+      if (m && m.agentCode) acc[m.agentCode.toUpperCase()] = m;
       return acc;
     }, {});
 
-    return Object.values(agentMap).map((a, idx) => {
+    // Filter by agent type: only show activation agents in this dashboard
+    const activationAgents = Object.values(agentMap).filter(a => {
+      const mapping = mappingMap[(a.name || '').toUpperCase()];
+      // If no mapping exists, default to showing (legacy behavior)
+      // If mapping exists, only show if agentType is 'activation'
+      return !mapping || mapping.agentType === 'activation' || !mapping.agentType;
+    });
+
+    return activationAgents.map((a, idx) => {
       const initials = a.name.split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase();
       const color    = COLORS[idx % COLORS.length];
       const claimed  = a.orders.filter(o => o.claimed).length;
       const completed = a.orders.filter(o => o.completed).length;
       
+      // Calculate bad handling: orders with claim time > 1000 minutes (60000 seconds)
+      const badHandlingCount = a.orders.filter(o => o.claimTimeSec != null && o.claimTimeSec > 60000).length;
+      
+      // Filter out bad handling times from average calculation
       const claimTimes  = a.orders
         .map(o => o.claimTimeSec)
-        .filter(v => v != null && v >= 0 && v < 86400);
+        .filter(v => v != null && v >= 0 && v < 86400 && v <= 60000);
       const handleTimes = a.orders
         .map(o => o.handleTimeSec)
-        .filter(v => v != null && v >= 0 && v < 86400);
+        .filter(v => v != null && v >= 0 && v < 86400 && v <= 60000);
 
-      const mapping = mappingMap[a.name];
+      const mapping = mappingMap[(a.name || '').toUpperCase()];
       const visible = mapping ? mapping.visible !== false : true;
 
       return {
@@ -535,12 +568,24 @@ export default function ActivationPerformance() {
         completed,
         claimTimeSec:  Math.round(avg(claimTimes)),
         handleTimeSec: Math.round(avg(handleTimes)),
+        badHandlingCount,
         status:        'active',
         trend:         'neutral',
         visible,
+        orders:        a.orders, // Pass orders for modal
       };
     }).filter(a => a.total > 0 && a.visible).sort((a, b) => b.total - a.total);
   }, [loadState, allOrders, currentRange, customDates]);
+
+  function handleAgentClick(agent) {
+    setSelectedAgent(agent);
+    setIsModalOpen(true);
+  }
+
+  function handleCloseModal() {
+    setIsModalOpen(false);
+    setSelectedAgent(null);
+  }
 
   function handleSort(col) {
     setSortState(prev => ({
@@ -552,6 +597,7 @@ export default function ActivationPerformance() {
 
   function handleRangeChange(range) {
     setCurrentRange(range);
+    localStorage.setItem('tpw_filter_range', range);
     setPage(1);
   }
 
@@ -574,47 +620,61 @@ export default function ActivationPerformance() {
                   Showing data for: <strong>{label}</strong>
                   {loadState === 'demo' && (
                     <span style={{ color: 'rgba(216,245,236,0.4)', marginLeft: '8px' }}>
-                      (demo mode — import a CSV via Admin to see live data)
+                      (no data — import a CSV via Admin to see data)
                     </span>
                   )}
                 </p>
               </div>
 
-              {/* Filter bar */}
-              <div className="filter-bar">
-                {['today','yesterday','week','month','mtd','quarter','annual'].map(r => (
-                  <button
-                    key={r}
-                    className={`filter-btn${currentRange === r ? ' active' : ''}`}
-                    onClick={() => handleRangeChange(r)}
-                  >
-                    {FILTER_LABELS[r]}
-                  </button>
-                ))}
-                <div className="filter-separator" />
-                <div className="filter-custom">
-                  <span>From</span>
-                  <input
-                    type="date"
-                    value={customDates.from}
-                    onChange={(e) => {
-                      setCustomDates(d => ({ ...d, from: e.target.value }));
-                      setCurrentRange('custom');
-                      setPage(1);
-                    }}
-                    aria-label="Custom date from"
-                  />
-                  <span>To</span>
-                  <input
-                    type="date"
-                    value={customDates.to}
-                    onChange={(e) => {
-                      setCustomDates(d => ({ ...d, to: e.target.value }));
-                      setCurrentRange('custom');
-                      setPage(1);
-                    }}
-                    aria-label="Custom date to"
-                  />
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+                <button className="pdf-btn" onClick={() => window.print()}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  Save as PDF
+                </button>
+                {/* Filter bar */}
+                <div className="filter-bar">
+                  {['today','yesterday','week','lastmonth','month','mtd','quarter','annual'].map(r => (
+                    <button
+                      key={r}
+                      className={`filter-btn${currentRange === r ? ' active' : ''}`}
+                      onClick={() => handleRangeChange(r)}
+                    >
+                      {FILTER_LABELS[r]}
+                    </button>
+                  ))}
+                  <div className="filter-separator" />
+                  <div className="filter-custom">
+                    <span>From</span>
+                    <input
+                      type="date"
+                      value={customDates.from}
+                      onChange={(e) => {
+                        setCustomDates(d => ({ ...d, from: e.target.value }));
+                        setCurrentRange('custom');
+                        localStorage.setItem('tpw_filter_range', 'custom');
+                        localStorage.setItem('tpw_filter_from', e.target.value);
+                        setPage(1);
+                      }}
+                      aria-label="Custom date from"
+                    />
+                    <span>To</span>
+                    <input
+                      type="date"
+                      value={customDates.to}
+                      onChange={(e) => {
+                        setCustomDates(d => ({ ...d, to: e.target.value }));
+                        setCurrentRange('custom');
+                        localStorage.setItem('tpw_filter_range', 'custom');
+                        localStorage.setItem('tpw_filter_to', e.target.value);
+                        setPage(1);
+                      }}
+                      aria-label="Custom date to"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -637,6 +697,14 @@ export default function ActivationPerformance() {
               page={page}
               onPage={setPage}
               slaMinutes={slaSettings?.activation?.workingHours}
+              onAgentClick={handleAgentClick}
+            />
+
+            <AgentDetailModal
+              isOpen={isModalOpen}
+              onClose={handleCloseModal}
+              agent={selectedAgent}
+              teamType="activation"
             />
           </>
         )}

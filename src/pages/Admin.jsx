@@ -12,6 +12,7 @@ import {
   serverTimestamp,
   Timestamp,
   limit,
+  getDoc,
 } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
 import { db, auth } from '../firebase';
@@ -183,6 +184,53 @@ function avgArr(arr) {
   return valid.reduce((s, v) => s + v, 0) / valid.length;
 }
 
+// ─── SALES EFFECTIVE START TIME ───────────────────────────────────────────────
+// Rule: if HOURS_TYPE is non-working, the SLA clock starts at 09:00 AM the
+// NEXT calendar day (sales working hours: 09:00 – 22:00).
+// If HOURS_TYPE is working, the clock starts at the actual order creation time.
+function getEffectiveSalesStartTime(orderDT, hoursType) {
+  if (!orderDT) return null;
+  const isNonWorking = (hoursType || '').toLowerCase().includes('non');
+  if (isNonWorking) {
+    const next9AM = new Date(orderDT);
+    next9AM.setDate(next9AM.getDate() + 1);
+    next9AM.setHours(9, 0, 0, 0);
+    return next9AM;
+  }
+  return orderDT;
+}
+
+// ─── EFFECTIVE START TIME FOR LOGISTICS/ACTIVATION ────────────────────────────
+// Rule: If assigned outside working hours, the SLA clock starts at 09:00 AM
+// on the next working day. If within working hours, clock starts at actual time.
+// Example: Assigned at 10 PM, claimed at 11 AM next day = 2 hours (11 AM - 9 AM)
+function getEffectiveStartTime(assignDT, department) {
+  if (!assignDT) return null;
+  
+  const config = WORKING_HOURS[department];
+  if (!config) return assignDT;
+  
+  const hour = assignDT.getHours();
+  
+  // If before working hours (e.g., 8 AM), start from 9 AM same day
+  if (hour < config.start) {
+    const sameDay9AM = new Date(assignDT);
+    sameDay9AM.setHours(config.start, 0, 0, 0);
+    return sameDay9AM;
+  }
+  
+  // If after working hours (e.g., 10 PM), start from 9 AM next day
+  if (hour >= config.end) {
+    const nextDay9AM = new Date(assignDT);
+    nextDay9AM.setDate(nextDay9AM.getDate() + 1);
+    nextDay9AM.setHours(config.start, 0, 0, 0);
+    return nextDay9AM;
+  }
+  
+  // Within working hours, use actual time
+  return assignDT;
+}
+
 function fmtTime(sec) {
   if (sec == null || isNaN(sec)) return '—';
   const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
@@ -192,6 +240,37 @@ function fmtTime(sec) {
 // ─── ROW PROCESSOR ────────────────────────────────────────────────────────────
 function getRowAgentName(row) {
   return (row['SALESMAN_ID'] || row['SALES_USER_FIRST'] || row['LOGISTICS_USER_FIRST'] || row['LOGISTICS_USER_LAST'] || row['DELIVERY_USER'] || row['ACTIVATION_USER'] || '').trim();
+}
+
+// Extract ALL agents from a row with their default types from the report
+function extractAllAgentsFromRow(row) {
+  const agents = [];
+  
+  // Sales agents
+  const salesAgent = (row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim();
+  if (salesAgent) {
+    agents.push({ agentCode: salesAgent, agentType: 'sales' });
+  }
+  
+  // Logistics agents
+  const logisticsAgent = (row['LOGISTICS_USER_FIRST'] || row['LOGISTICS_USER_LAST'] || '').trim();
+  if (logisticsAgent) {
+    agents.push({ agentCode: logisticsAgent, agentType: 'logistics' });
+  }
+  
+  // Activation agents
+  const activationAgent = (row['ACTIVATION_USER'] || '').trim();
+  if (activationAgent) {
+    agents.push({ agentCode: activationAgent, agentType: 'activation' });
+  }
+  
+  // Delivery agents
+  const deliveryAgent = (row['DELIVERY_USER'] || '').trim();
+  if (deliveryAgent) {
+    agents.push({ agentCode: deliveryAgent, agentType: 'logistics' });
+  }
+  
+  return agents;
 }
 
 function processRows(rows) {
@@ -252,7 +331,22 @@ function computeSummary(agents, rows) {
   const dateFrom = dates[0]     ? dates[0].toLocaleDateString()     : '—';
   const dateTo   = dates.at(-1) ? dates.at(-1).toLocaleDateString() : '—';
 
-  return { totalOrders, totalClaimed, avgClaimTimeSec: avgClaim, avgAssignTimeSec: avgAssign, dateFrom, dateTo };
+  // Count agents by type
+  const salesAgents = agents.filter(a => a.agentType === 'sales' || !a.agentType).length;
+  const logisticsAgents = agents.filter(a => a.agentType === 'logistics').length;
+  const activationAgents = agents.filter(a => a.agentType === 'activation').length;
+
+  return { 
+    totalOrders, 
+    totalClaimed, 
+    avgClaimTimeSec: avgClaim, 
+    avgAssignTimeSec: avgAssign, 
+    dateFrom, 
+    dateTo,
+    salesAgents,
+    logisticsAgents,
+    activationAgents
+  };
 }
 
 // ─── SUB-COMPONENTS ────────────────────────────────────────────────────────────
@@ -517,8 +611,23 @@ function ImportBar({ rowCount, onImport, importing, progress }) {
 
 function SuccessSection({ result, onNewImport }) {
   const s = result.summary;
+  const agentBreakdown = s.salesAgents || s.logisticsAgents || s.activationAgents
+    ? `${s.salesAgents || 0} sales · ${s.logisticsAgents || 0} logistics · ${s.activationAgents || 0} activation`
+    : `${result.agents} agents`;
+  
+  // Check if this is a large file result with per-collection counts
+  const isLargeFile = result.isLargeFile;
+  const hasCollectionCounts = result.salesCount !== undefined;
+  const uniqueCount = result.uniqueOrderCount ?? result.rowCount;
+  
   const kpis = [
-    { val: result.rowCount.toLocaleString(),     lbl: 'Total Orders' },
+    { val: uniqueCount.toLocaleString(), lbl: 'Unique Orders' },
+    { val: result.rowCount.toLocaleString(), lbl: 'Total Rows Processed' },
+    ...(hasCollectionCounts ? [
+      { val: result.salesCount?.toLocaleString() || '0', lbl: 'Sales Orders Saved' },
+      { val: result.logisticsCount?.toLocaleString() || '0', lbl: 'Logistics Orders Saved' },
+      { val: result.activationCount?.toLocaleString() || '0', lbl: 'Activation Orders Saved' },
+    ] : []),
     { val: s.totalClaimed.toLocaleString(),      lbl: 'Claimed Orders' },
     { val: result.agents,                        lbl: 'Unique Agents' },
     { val: fmtTime(s.avgClaimTimeSec),           lbl: 'Avg Claim Time' },
@@ -537,7 +646,7 @@ function SuccessSection({ result, onNewImport }) {
         <div>
           <div className="success-banner-title">Import Successful</div>
           <div className="success-banner-sub">
-            {result.filename} · {result.rowCount.toLocaleString()} rows · {result.agents} agents · {s.dateFrom} – {s.dateTo}
+            {result.filename} · {result.rowCount.toLocaleString()} rows {result.isLargeFile ? '(Large File)' : ''} · {agentBreakdown} · {s.dateFrom} – {s.dateTo}
           </div>
         </div>
       </div>
@@ -1202,9 +1311,13 @@ export default function Admin() {
   const parsedAgents = useMemo(() => {
     const map = {};
     parsedRows.forEach(row => {
-      const code = getRowAgentName(row);
-      if (!code) return;
-      if (!map[code]) map[code] = { agentCode: code, displayName: '', visible: true, source: 'report' };
+      const agents = extractAllAgentsFromRow(row);
+      agents.forEach(({ agentCode, agentType }) => {
+        if (!agentCode) return;
+        if (!map[agentCode]) {
+          map[agentCode] = { agentCode, displayName: '', visible: true, agentType, source: 'report' };
+        }
+      });
     });
     return Object.values(map).sort((a, b) => a.agentCode.localeCompare(b.agentCode));
   }, [parsedRows]);
@@ -1313,16 +1426,24 @@ export default function Admin() {
 
   async function handleClearData() {
     setClearing(true);
-    setClearProgress({ pct: 5, label: 'Fetching imports…' });
+    setClearProgress({ pct: 5, label: 'Fetching data to clear…' });
     
     // Initial cooldown to let pending operations settle
     await delay(1000);
     
     try {
-      const importsSnap = await getDocs(collection(db, 'imports'));
-      const importDocs  = importsSnap.docs;
+      // Load all data that needs to be cleared
+      const [importsSnap, ordersSnap, logisticsSnap, activationSnap] = await Promise.all([
+        getDocs(collection(db, 'imports')),
+        getDocs(collection(db, 'orders')),
+        getDocs(collection(db, 'logisticsOrders')),
+        getDocs(collection(db, 'activationOrders')),
+      ]);
 
-      if (importDocs.length === 0) {
+      const totalDocs = importsSnap.docs.length + ordersSnap.docs.length + 
+                        logisticsSnap.docs.length + activationSnap.docs.length;
+
+      if (totalDocs === 0) {
         setHistory([]);
         localStorage.setItem('tpw_data_source', 'demo');
         setClearing(false);
@@ -1333,16 +1454,13 @@ export default function Admin() {
       const BATCH_SIZE = 500; // Firestore batch limit
       const BATCH_DELAY = 100; // 100ms between batches to avoid rate limits
       const MAX_RETRIES = 3;
+      let processedDocs = 0;
 
-      for (let i = 0; i < importDocs.length; i++) {
-        const importDoc  = importDocs[i];
-        const ordersSnap = await getDocs(collection(db, 'imports', importDoc.id, 'orders'));
-        const orderDocs = ordersSnap.docs;
-
-        // Delete orders in max-size batches with small delays
-        for (let j = 0; j < orderDocs.length; j += BATCH_SIZE) {
+      // Helper to delete a collection of docs
+      const deleteDocs = async (docs, collectionName) => {
+        for (let j = 0; j < docs.length; j += BATCH_SIZE) {
           const batch = writeBatch(db);
-          orderDocs.slice(j, j + BATCH_SIZE).forEach(d => batch.delete(d.ref));
+          docs.slice(j, j + BATCH_SIZE).forEach(d => batch.delete(d.ref));
           
           // Retry with exponential backoff on rate limit errors
           let retries = 0;
@@ -1360,38 +1478,22 @@ export default function Admin() {
             }
           }
           
+          processedDocs += Math.min(BATCH_SIZE, docs.length - j);
+          const pct = Math.round(10 + (processedDocs / totalDocs) * 85);
+          setClearProgress({ pct, label: `Clearing ${collectionName}… (${processedDocs} of ${totalDocs})` });
+          
           // Small delay between batches to prevent burst rate limiting
-          if (j + BATCH_SIZE < orderDocs.length) {
+          if (j + BATCH_SIZE < docs.length) {
             await delay(BATCH_DELAY);
           }
         }
+      };
 
-        // Delete the import document itself
-        const batch = writeBatch(db);
-        batch.delete(importDoc.ref);
-        let retries = 0;
-        while (retries < MAX_RETRIES) {
-          try {
-            await batch.commit();
-            break;
-          } catch (err) {
-            if (err?.code === 'resource-exhausted' && retries < MAX_RETRIES - 1) {
-              retries++;
-              await delay(1000 * Math.pow(2, retries));
-            } else {
-              throw err;
-            }
-          }
-        }
-
-        // Delay between imports
-        if (i < importDocs.length - 1) {
-          await delay(BATCH_DELAY);
-        }
-
-        const pct = Math.round(10 + ((i + 1) / importDocs.length) * 88);
-        setClearProgress({ pct, label: `Deleted import ${i + 1} of ${importDocs.length} (${orderDocs.length} orders)…` });
-      }
+      // Clear all global order collections
+      await deleteDocs(ordersSnap.docs, 'Sales Orders');
+      await deleteDocs(logisticsSnap.docs, 'Logistics Orders');
+      await deleteDocs(activationSnap.docs, 'Activation Orders');
+      await deleteDocs(importsSnap.docs, 'Import Records');
 
       setClearProgress({ pct: 100, label: 'Done!' });
       setHistory([]);
@@ -1476,148 +1578,206 @@ export default function Admin() {
     try {
       const agents  = processRows(parsedRows);
       const summary = computeSummary(agents, parsedRows);
+      
+      // Get unique order numbers for stats
+      const orderNos = parsedRows
+        .map(row => (row['CHANNEL_ORDER_NO'] || '').trim())
+        .filter(Boolean);
+      const uniqueOrderNos = [...new Set(orderNos)];
+      const totalRows = parsedRows.length;
+      const uniqueCount = uniqueOrderNos.length;
+      
+      // Note: We're skipping the expensive existence check for large files
+      // since we're using set with merge anyway. The first import will create,
+      // subsequent imports will update.
+      const isLargeFile = totalRows > 10000;
+      
+      setImportProgress({ pct: 15, label: `Processing ${totalRows.toLocaleString()} rows (${uniqueCount.toLocaleString()} unique orders)…`, show: true });
 
-      setImportProgress({ pct: 20, label: 'Saving import metadata…', show: true });
-
+      // Save import metadata
       const importRef = await addDoc(collection(db, 'imports'), {
         filename:    file ? file.name : 'unknown.csv',
-        rowCount:    parsedRows.length,
+        rowCount:    totalRows,
+        uniqueOrderCount: uniqueCount,
         agentCount:  agents.length,
+        salesAgentCount: summary.salesAgents || 0,
+        logisticsAgentCount: summary.logisticsAgents || 0,
+        activationAgentCount: summary.activationAgents || 0,
         summary,
         importedAt:  serverTimestamp(),
+        isLargeFile,
       });
 
       const importId = importRef.id;
 
-      // Build sales orders array (full journey data)
-      const orders = parsedRows.map(row => {
-        const orderDT  = parseDateTime(row['ORDER_CREATION_DATE_TIME1'] || row['ORDER_CREATION_DATE'], row['ORDER_CREATION_time']);
-        const claimDT  = parseDateTime(row['SALES_CLAIM_DATE_FIRST'], row['SALES_CLAIM_TIME_FIRST']);
-        const logisticsAssignDT = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
-        const logisticsClaimDT  = parseDateTime(row['LOGISTICS_CLAIM_DATE_FIRST'], row['LOGISTICS_CLAIM_TIME_FIRST']);
-        const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
-        
-        return {
-          orderNo:      row['CHANNEL_ORDER_NO'] || '',
-          agentName:    getRowAgentName(row),
-          channel:      row['CHANNEL'] || '',
-          status:       row['ESHOP_ORDER_STATUS'] || '',
-          hoursType:    row['HOURS_TYPE'] || '',
-          orderDT:      orderDT ? Timestamp.fromDate(orderDT) : null,
-          claimDT:      claimDT ? Timestamp.fromDate(claimDT) : null,
-          logisticsAssignDT: logisticsAssignDT ? Timestamp.fromDate(logisticsAssignDT) : null,
-          logisticsClaimDT: logisticsClaimDT ? Timestamp.fromDate(logisticsClaimDT) : null,
-          activationAssignDT: activationAssignDT ? Timestamp.fromDate(activationAssignDT) : null,
-          claimed:      !!claimDT,
-          claimTimeSec: diffSeconds(orderDT, claimDT),
-          assignTimeSec: diffSeconds(claimDT, logisticsAssignDT), // Time from claim to logistics assignment (for sales dashboard)
-          logisticsAssignTimeSec: diffSeconds(claimDT, logisticsAssignDT),
-          logisticsClaimTimeSec: diffSeconds(logisticsAssignDT, logisticsClaimDT),
-          activationAssignTimeSec: diffSeconds(logisticsClaimDT, activationAssignDT),
-        };
-      });
-
-      // Build logistics orders array
-      const logisticsOrders = parsedRows.map(row => {
-        const assignDT  = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
-        const claimDT   = parseDateTime(row['LOGISTICS_CLAIM_DATE_FIRST'], row['LOGISTICS_CLAIM_TIME_FIRST']);
-        const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
-        return {
-          orderNo:      row['CHANNEL_ORDER_NO'] || '',
-          agentName:    row['LOGISTICS_USER_FIRST'] || row['LOGISTICS_USER_LAST'] || '',
-          channel:      row['CHANNEL'] || '',
-          status:       row['ESHOP_ORDER_STATUS'] || '',
-          assignDT:     assignDT ? Timestamp.fromDate(assignDT) : null,
-          claimDT:      claimDT ? Timestamp.fromDate(claimDT) : null,
-          activationAssignDT: activationAssignDT ? Timestamp.fromDate(activationAssignDT) : null,
-          claimed:      !!claimDT,
-          claimTimeSec: diffSeconds(assignDT, claimDT),
-          activationAssignTimeSec: diffSeconds(claimDT, activationAssignDT),
-        };
-      }).filter(o => o.agentName); // Only include orders with a logistics agent
-
-      // Batch write with Blaze plan optimizations
-      const CHUNK = 500;        // Firestore batch limit
-      const BATCH_DELAY = 100;  // 100ms between batches
+      // Firestore batch configuration
+      const CHUNK = 450; // Slightly under 500 limit for safety
       const MAX_RETRIES = 3;
-      const total = orders.length;
-      let done = 0;
+      const BATCH_DELAY = isLargeFile ? 50 : 0; // Small delay between batches for large files
 
-      // Write sales orders
-      for (let i = 0; i < orders.length; i += CHUNK) {
-        const chunk = orders.slice(i, i + CHUNK);
-        const batch = writeBatch(db);
-        chunk.forEach(order => {
-          const ref = doc(collection(db, 'imports', importId, 'orders'));
-          batch.set(ref, order);
-        });
-        
-        // Retry with exponential backoff on rate limit errors
+      const commitWithRetry = async (batch) => {
         let retries = 0;
-        while (retries < MAX_RETRIES) {
+        while (true) {
           try {
             await batch.commit();
-            break;
+            return;
           } catch (err) {
             if (err?.code === 'resource-exhausted' && retries < MAX_RETRIES - 1) {
               retries++;
-              setImportProgress({ pct: Math.round(10 + (done / total) * 35), label: `Writing sales orders… ${done.toLocaleString()} / ${total.toLocaleString()} (Retry ${retries})`, show: true });
-              await delay(1000 * Math.pow(2, retries)); // 2s, 4s, 8s
-            } else {
-              throw err;
-            }
-          }
-        }
-        
-        done += chunk.length;
-        const pct = Math.round(10 + (done / total) * 35);
-        setImportProgress({ pct, label: `Writing sales orders… ${done.toLocaleString()} / ${total.toLocaleString()}`, show: true });
-        
-        // Small delay between batches to prevent burst rate limiting
-        if (i + CHUNK < orders.length) {
-          await delay(BATCH_DELAY);
-        }
-      }
-
-      // Write logistics orders
-      const logisticsTotal = logisticsOrders.length;
-      let logisticsDone = 0;
-
-      for (let i = 0; i < logisticsOrders.length; i += CHUNK) {
-        const chunk = logisticsOrders.slice(i, i + CHUNK);
-        const batch = writeBatch(db);
-        chunk.forEach(order => {
-          const ref = doc(collection(db, 'imports', importId, 'logisticsOrders'));
-          batch.set(ref, order);
-        });
-        
-        // Retry with exponential backoff on rate limit errors
-        let retries = 0;
-        while (retries < MAX_RETRIES) {
-          try {
-            await batch.commit();
-            break;
-          } catch (err) {
-            if (err?.code === 'resource-exhausted' && retries < MAX_RETRIES - 1) {
-              retries++;
-              setImportProgress({ pct: Math.round(45 + (logisticsDone / logisticsTotal) * 35), label: `Writing logistics orders… ${logisticsDone.toLocaleString()} / ${logisticsTotal.toLocaleString()} (Retry ${retries})`, show: true });
               await delay(1000 * Math.pow(2, retries));
             } else {
               throw err;
             }
           }
         }
-        
-        logisticsDone += chunk.length;
-        const pct = Math.round(45 + (logisticsDone / logisticsTotal) * 35);
-        setImportProgress({ pct, label: `Writing logistics orders… ${logisticsDone.toLocaleString()} / ${logisticsTotal.toLocaleString()}`, show: true });
-        
-        if (i + CHUNK < logisticsOrders.length) {
-          await delay(BATCH_DELAY);
-        }
-      }
+      };
 
-      setImportProgress({ pct: 100, label: 'Import complete!', show: true });
+      // Stream process rows in chunks to reduce memory usage
+      const processInChunks = async (collectionName, rowProcessor, totalCount, collectionLabel) => {
+        let processedCount = 0;
+        let batch = writeBatch(db);
+        let batchCount = 0;
+        
+        for (let i = 0; i < parsedRows.length; i++) {
+          const order = rowProcessor(parsedRows[i]);
+          if (!order) continue;
+          
+          const docRef = doc(db, collectionName, order.orderNo);
+          batch.set(docRef, order, { merge: true });
+          batchCount++;
+          processedCount++;
+          
+          if (batchCount >= CHUNK) {
+            await commitWithRetry(batch);
+            batch = writeBatch(db);
+            batchCount = 0;
+            
+            // Update progress
+            const pct = Math.round(20 + (processedCount / totalCount) * 70);
+            setImportProgress({ pct, label: `${collectionLabel}: ${processedCount.toLocaleString()} of ${totalCount.toLocaleString()}…`, show: true });
+            
+            // Small delay for large files to prevent rate limiting
+            if (isLargeFile && i < parsedRows.length - 1) {
+              await delay(BATCH_DELAY);
+            }
+          }
+        }
+        
+        // Commit remaining
+        if (batchCount > 0) {
+          await commitWithRetry(batch);
+        }
+        
+        return processedCount;
+      };
+
+      // Row processors for each collection
+      const processSalesOrder = (row) => {
+        const orderNo = (row['CHANNEL_ORDER_NO'] || '').trim();
+        if (!orderNo) return null;
+        
+        const orderDT  = parseDateTime(row['ORDER_CREATION_DATE_TIME1'] || row['ORDER_CREATION_DATE'], row['ORDER_CREATION_time']);
+        const claimDT  = parseDateTime(row['SALES_CLAIM_DATE_FIRST'], row['SALES_CLAIM_TIME_FIRST']);
+        const logisticsAssignDT = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
+        const logisticsClaimDT  = parseDateTime(row['LOGISTICS_CLAIM_DATE_FIRST'], row['LOGISTICS_CLAIM_TIME_FIRST']);
+        const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
+
+        const effectiveOrderDT = getEffectiveSalesStartTime(orderDT, row['HOURS_TYPE']);
+
+        return {
+          orderNo,
+          agentName:    getRowAgentName(row),
+          channel:      row['CHANNEL'] || '',
+          status:       row['ESHOP_ORDER_STATUS'] || '',
+          hoursType:    row['HOURS_TYPE'] || '',
+          orderDT:      orderDT ? Timestamp.fromDate(orderDT) : null,
+          effectiveOrderDT: effectiveOrderDT ? Timestamp.fromDate(effectiveOrderDT) : null,
+          claimDT:      claimDT ? Timestamp.fromDate(claimDT) : null,
+          logisticsAssignDT: logisticsAssignDT ? Timestamp.fromDate(logisticsAssignDT) : null,
+          logisticsClaimDT: logisticsClaimDT ? Timestamp.fromDate(logisticsClaimDT) : null,
+          activationAssignDT: activationAssignDT ? Timestamp.fromDate(activationAssignDT) : null,
+          claimed:      !!claimDT,
+          claimTimeSec: diffSeconds(effectiveOrderDT, claimDT),
+          assignTimeSec: diffSeconds(claimDT, logisticsAssignDT),
+          logisticsAssignTimeSec: diffSeconds(claimDT, logisticsAssignDT),
+          logisticsClaimTimeSec: diffSeconds(logisticsAssignDT, logisticsClaimDT),
+          activationAssignTimeSec: diffSeconds(logisticsClaimDT, activationAssignDT),
+          lastImportedAt: serverTimestamp(),
+          importId,
+        };
+      };
+
+      const processLogisticsOrder = (row) => {
+        const orderNo = (row['CHANNEL_ORDER_NO'] || '').trim();
+        const agentName = (row['LOGISTICS_USER_FIRST'] || row['LOGISTICS_USER_LAST'] || '').trim();
+        if (!orderNo || !agentName) return null;
+        
+        const assignDT  = parseDateTime(row['LOGISTICS_ASSIGN_DATE_1'], row['LOGISTICS_ASSIGN_TIME_1']);
+        const claimDT   = parseDateTime(row['LOGISTICS_CLAIM_DATE_FIRST'], row['LOGISTICS_CLAIM_TIME_FIRST']);
+        const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
+        const activationClaimDT = parseDateTime(row['ACTIVATION_CLAIM_DATE'], row['ACTIVATION_CLAIM_TIME']);
+        
+        const effectiveAssignDT = getEffectiveStartTime(assignDT, 'logistics');
+        
+        return {
+          orderNo,
+          agentName,
+          activationAgentName: row['ACTIVATION_USER'] || '',
+          channel:      row['CHANNEL'] || '',
+          status:       row['ESHOP_ORDER_STATUS'] || '',
+          assignDT:     assignDT ? Timestamp.fromDate(assignDT) : null,
+          effectiveAssignDT: effectiveAssignDT ? Timestamp.fromDate(effectiveAssignDT) : null,
+          claimDT:      claimDT ? Timestamp.fromDate(claimDT) : null,
+          activationAssignDT: activationAssignDT ? Timestamp.fromDate(activationAssignDT) : null,
+          activationClaimDT: activationClaimDT ? Timestamp.fromDate(activationClaimDT) : null,
+          claimed:      !!claimDT,
+          claimTimeSec: diffSeconds(effectiveAssignDT, claimDT),
+          activationAssignTimeSec: diffSeconds(claimDT, activationAssignDT),
+          handleTimeSec: diffSeconds(activationAssignDT, activationClaimDT),
+          completed:    !!activationClaimDT,
+          lastImportedAt: serverTimestamp(),
+          importId,
+        };
+      };
+
+      const processActivationOrder = (row) => {
+        const orderNo = (row['CHANNEL_ORDER_NO'] || '').trim();
+        const activationUser = (row['ACTIVATION_USER'] || '').trim();
+        if (!orderNo || !activationUser) return null;
+        
+        const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
+        const activationClaimDT = parseDateTime(row['ACTIVATION_CLAIM_DATE'], row['ACTIVATION_CLAIM_TIME']);
+        
+        const effectiveAssignDT = getEffectiveStartTime(activationAssignDT, 'activation');
+        
+        return {
+          orderNo,
+          agentName:    activationUser,
+          channel:      row['CHANNEL'] || '',
+          status:       row['ESHOP_ORDER_STATUS'] || '',
+          assignDT:     activationAssignDT ? Timestamp.fromDate(activationAssignDT) : null,
+          effectiveAssignDT: effectiveAssignDT ? Timestamp.fromDate(effectiveAssignDT) : null,
+          claimDT:      activationClaimDT ? Timestamp.fromDate(activationClaimDT) : null,
+          claimed:      !!activationClaimDT,
+          claimTimeSec: diffSeconds(effectiveAssignDT, activationClaimDT),
+          handleTimeSec: diffSeconds(activationAssignDT, activationClaimDT),
+          completed:    !!activationClaimDT,
+          lastImportedAt: serverTimestamp(),
+          importId,
+        };
+      };
+
+      // Process sequentially to reduce memory pressure and Firestore load
+      setImportProgress({ pct: 20, label: 'Writing Sales Orders…', show: true });
+      const salesCount = await processInChunks('orders', processSalesOrder, totalRows, 'Sales Orders');
+      
+      setImportProgress({ pct: 50, label: 'Writing Logistics Orders…', show: true });
+      const logisticsCount = await processInChunks('logisticsOrders', processLogisticsOrder, totalRows, 'Logistics Orders');
+      
+      setImportProgress({ pct: 80, label: 'Writing Activation Orders…', show: true });
+      const activationCount = await processInChunks('activationOrders', processActivationOrder, totalRows, 'Activation Orders');
+
+      setImportProgress({ pct: 95, label: 'Finalising…', show: true });
 
       // Update localStorage to tell navbar it's live data
       localStorage.setItem('tpw_data_source', 'live');
@@ -1627,73 +1787,67 @@ export default function Admin() {
         agents:   agents.length,
         summary,
         filename: file ? file.name : 'unknown.csv',
-        rowCount: parsedRows.length,
+        rowCount: totalRows,
+        uniqueOrderCount: uniqueCount,
+        salesCount,
+        logisticsCount,
+        activationCount,
         dateTo:   summary.dateTo,
+        isLargeFile,
       });
 
       setStep(4);
       await loadHistory();
       
-      // Save agent mappings from this import to Firestore
-      setImportProgress({ pct: 100, label: 'Saving agent mappings…', show: true });
-      try {
-        // First, load existing mappings to check which ones already exist
-        const existingMappingsSnap = await getDocs(collection(db, 'agentMappings'));
-        const existingMappings = {};
-        existingMappingsSnap.docs.forEach(d => {
-          const data = d.data();
-          if (data.agentCode) {
-            existingMappings[data.agentCode.toUpperCase()] = data;
-          }
-        });
-        
-        let batch = writeBatch(db);
-        let batchCount = 0;
-        let batchesCommitted = 0;
-        
-        for (const agent of agents) {
-          const code = agent.name.trim().toUpperCase();
-          if (!code) continue;
+      // Save agent mappings from this import to Firestore (skip for very large files if needed)
+      if (!isLargeFile || agents.length < 1000) {
+        setImportProgress({ pct: 98, label: 'Saving agent mappings…', show: true });
+        try {
+          const existingMappingsSnap = await getDocs(collection(db, 'agentMappings'));
+          const existingMappings = {};
+          existingMappingsSnap.docs.forEach(d => {
+            const data = d.data();
+            if (data.agentCode) {
+              existingMappings[data.agentCode.toUpperCase()] = data;
+            }
+          });
           
-          const ref = doc(db, 'agentMappings', code);
-          const existing = existingMappings[code];
+          let batch = writeBatch(db);
+          let batchCount = 0;
           
-          // Only create new mapping if it doesn't exist
-          // If it exists, preserve all existing settings (visible, agentType, displayName)
-          if (!existing) {
-            batch.set(ref, {
-              agentCode: code,
-              displayName: '',
-              visible: true,
-              agentType: 'sales',
-            });
-            
-            batchCount++;
-            
-            // Commit when we hit the batch limit
-            if (batchCount >= 400) {
-              await batch.commit();
-              batchesCommitted++;
-              // Create new batch after commit
-              batch = writeBatch(db);
-              batchCount = 0;
-              // Small delay between mapping batches
-              if (batchesCommitted % 5 === 0) {
-                await delay(100);
+          for (const agent of parsedAgents) {
+            const code = (agent.agentCode || '').trim().toUpperCase();
+            if (!code) continue;
+
+            const ref = doc(db, 'agentMappings', code);
+            const existing = existingMappings[code];
+
+            if (!existing) {
+              batch.set(ref, {
+                agentCode: code,
+                displayName: '',
+                visible: true,
+                agentType: agent.agentType || 'sales',
+              });
+              
+              batchCount++;
+              
+              if (batchCount >= 400) {
+                await batch.commit();
+                batch = writeBatch(db);
+                batchCount = 0;
               }
             }
           }
+          
+          if (batchCount > 0) {
+            await batch.commit();
+          }
+          
+          await loadMappings();
+        } catch (mappingErr) {
+          console.error('Error saving agent mappings:', mappingErr);
         }
-        
-        if (batchCount > 0) {
-          await batch.commit();
-        }
-        
-        // Reload mappings to show the newly saved agents
-        await loadMappings();
-      } catch (mappingErr) {
-        console.error('Error saving agent mappings:', mappingErr);
-        // Don't fail the import if mappings fail to save
       }
       
       setImportProgress({ pct: 100, label: 'Import complete!', show: true });

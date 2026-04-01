@@ -8,48 +8,24 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import Navbar from '../components/Navbar';
-import { calculateSLAMetrics, formatMinutes, WORKING_HOURS } from '../utils/sla';
 
 // ─── COLORS ────────────────────────────────────────────────────────────────────
-const STAGE_COLORS = {
-  created: '#3A7BD5',     // Blue
-  claimed: '#7B3FA0',     // Purple
-  logistics: '#E67E22',   // Orange
-  activation: '#2ECC8A',  // Emerald
-  total: '#1ABC9C',       // Teal
-};
-
-// Default SLA times in seconds (2 hours = 7200 seconds)
-const DEFAULT_SLA = {
-  sales: { workingHours: 7200, nonWorkingHours: 7200 },
-  logistics: { workingHours: 7200, nonWorkingHours: 7200 },
-  activation: { workingHours: 7200, nonWorkingHours: 7200 },
-};
-
-// ─── DEMO DATA ─────────────────────────────────────────────────────────────────
-const DEMO_STATS = {
-  totalOrders: 1250,
-  claimedOrders: 1180,
-  logisticsAssigned: 1150,
-  activationAssigned: 1080,
-  avgClaimTimeSec: 285,           // ~5 minutes
-  avgLogisticsAssignTimeSec: 420, // ~7 minutes
-  avgActivationAssignTimeSec: 1800, // ~30 minutes
-  avgTotalJourneySec: 2520,       // ~42 minutes
-};
-
-const DEMO_MULTIPLIERS = {
-  today: 0.035, yesterday: 0.033, week: 0.22,
-  month: 1, mtd: 0.70, quarter: 3.1, annual: 12.5,
-};
-
-const FILTER_LABELS = {
-  today:'Today', yesterday:'Yesterday', week:'This Week',
-  month:'This Month', mtd:'Month to Date', quarter:'This Quarter', annual:'This Year',
+const COLORS = {
+  claimed:    '#7B3FA0',  // Purple  – Sales
+  logistics:  '#E67E22',  // Orange  – Logistics
+  activation: '#2ECC8A',  // Emerald – Activation
+  total:      '#1ABC9C',  // Teal    – Total
 };
 
 // Bad handling threshold: 1000 minutes = 60000 seconds
 const BAD_HANDLING_THRESHOLD_SEC = 60000;
+
+// No demo data - only real imported data is displayed
+
+const FILTER_LABELS = {
+  today:'Today', yesterday:'Yesterday', week:'This Week',
+  lastmonth:'Last Month', month:'This Month', mtd:'Month to Date', quarter:'This Quarter', annual:'This Year',
+};
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
 function fmtTime(sec) {
@@ -61,24 +37,16 @@ function fmtTime(sec) {
   return `${m}m ${String(s).padStart(2, '0')}s`;
 }
 
-function fmtTimeShort(sec) {
-  if (!sec || isNaN(sec)) return '0m';
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
 function avg(arr) {
-  const v = arr.filter(x => x != null && !isNaN(x) && x >= 0 && x <= BAD_HANDLING_THRESHOLD_SEC);
+  const v = arr.filter(x => x != null && !isNaN(x) && x >= 0);
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
 }
 
 function getRangeBounds(range, customDates) {
-  const now  = new Date();
-  const y    = now.getFullYear();
-  const mo   = now.getMonth();
-  const d    = now.getDate();
+  const now = new Date();
+  const y   = now.getFullYear();
+  const mo  = now.getMonth();
+  const d   = now.getDate();
 
   if (range === 'today')     return { from: new Date(y, mo, d, 0, 0, 0),      to: new Date(y, mo, d, 23, 59, 59) };
   if (range === 'yesterday') return { from: new Date(y, mo, d - 1, 0, 0, 0),  to: new Date(y, mo, d - 1, 23, 59, 59) };
@@ -87,6 +55,7 @@ function getRangeBounds(range, customDates) {
   if (range === 'mtd')       return { from: new Date(y, mo, 1),                to: now };
   if (range === 'quarter')   return { from: new Date(y, Math.floor(mo / 3) * 3, 1), to: now };
   if (range === 'annual')    return { from: new Date(y, 0, 1),                 to: now };
+  if (range === 'lastmonth') return { from: new Date(y, mo - 1, 1, 0, 0, 0),  to: new Date(y, mo, 0, 23, 59, 59) };
   if (range === 'custom' && customDates.from && customDates.to) {
     return {
       from: new Date(customDates.from + 'T00:00:00'),
@@ -106,77 +75,52 @@ function LoadingState() {
   );
 }
 
-function JourneyStage({ 
-  icon, 
-  title, 
-  count, 
-  avgTime, 
-  color, 
-  isLast, 
-  conversionRate,
-  subtitle,
-  slaExceeded,
-  slaMinutes,
-  showSLA = true
-}) {
-  // Check if SLA is exceeded
-  const displayColor = slaExceeded ? '#E74C3C' : color;
-  
+function StageCard({ icon, title, count, avgTime, color, timeLabel, isLast }) {
   return (
     <div className="journey-stage">
       <div className="stage-header">
-        <div className="stage-icon-wrap" style={{ background: `${displayColor}20`, borderColor: `${displayColor}40` }}>
-          <div className="stage-icon" style={{ color: displayColor }}>
-            {icon}
-          </div>
+        <div className="stage-icon-wrap" style={{ background: `${color}20`, borderColor: `${color}40` }}>
+          <div className="stage-icon" style={{ color }}>{icon}</div>
         </div>
         {!isLast && (
-          <div className="stage-connector" style={{ background: `linear-gradient(90deg, ${displayColor}, rgba(216,245,236,0.1))` }} />
+          <div className="stage-connector" style={{ background: `linear-gradient(90deg, ${color}, rgba(216,245,236,0.1))` }} />
         )}
       </div>
       <div className="stage-content">
         <div className="stage-title">{title}</div>
-        <div className="stage-avg-main" style={{ color: displayColor }}>{avgTime > 0 ? fmtTime(avgTime) : '—'}</div>
-        {showSLA && slaExceeded && (
-          <div className="stage-sla-warning">SLA Exceeded</div>
-        )}
+        <div className="stage-avg-main" style={{ color }}>{avgTime > 0 ? fmtTime(avgTime) : '—'}</div>
         <div className="stage-count-sub">{count.toLocaleString()} orders</div>
-        {subtitle && <div className="stage-subtitle">{subtitle}</div>}
-        {conversionRate !== null && conversionRate !== undefined && (
-          <div className="stage-conversion">
-            <span className="conversion-badge" style={{ background: `${displayColor}20`, color: displayColor }}>
-              {conversionRate}% conversion
-            </span>
-          </div>
-        )}
+        <div className="stage-subtitle">{timeLabel}</div>
       </div>
     </div>
   );
 }
 
-function TotalJourneyCard({ avgTotalTime, totalOrders }) {
+function HandlingSection({ sales, logistics, activation, total }) {
+  const items = [
+    { label: 'Sales Handling Time',      time: sales,      color: COLORS.claimed,    sub: 'claim → logistics assign' },
+    { label: 'Logistics Handling Time',  time: logistics,   color: COLORS.logistics,  sub: 'claim → activation assign' },
+    { label: 'Activation Handling Time', time: activation,  color: COLORS.activation, sub: 'claim → complete' },
+    { label: 'Total Handling Time',      time: total,       color: COLORS.total,      sub: 'combined average', isTotal: true },
+  ];
+
   return (
-    <div className="total-journey-card">
-      <div className="total-journey-header">
-        <div className="total-journey-icon" style={{ background: `${STAGE_COLORS.total}20` }}>
-          <svg viewBox="0 0 24 24" style={{ stroke: STAGE_COLORS.total }} aria-hidden="true">
-            <circle cx="12" cy="12" r="10"/>
-            <polyline points="12 6 12 12 16 14"/>
-          </svg>
-        </div>
-        <div>
-          <div className="total-journey-title">Total Journey Time</div>
-          <div className="total-journey-subtitle">End-to-end order processing</div>
-        </div>
-      </div>
-      <div className="total-journey-time" style={{ color: STAGE_COLORS.total }}>
-        {fmtTime(avgTotalTime)}
-      </div>
-      <div className="total-journey-avg">
-        <span>Average across {totalOrders.toLocaleString()} orders</span>
-      </div>
-      <div className="total-journey-note">
-        * Excluding orders with claim time &gt; 1000 min (bad handling)
+    <div className="dash-handling-section">
+      <div className="dash-handling-header">Handling Times</div>
+      <div className="dash-handling-row">
+        {items.map(item => (
+          <div
+            key={item.label}
+            className="dash-handling-card"
+            style={{ borderColor: item.isTotal ? `${item.color}50` : `${item.color}30` }}
+          >
+            <div className="dash-handling-label">{item.label}</div>
+            <div className="dash-handling-time" style={{ color: item.color }}>
+              {item.time > 0 ? fmtTime(item.time) : '—'}
+            </div>
+            <div className="dash-handling-sub">{item.sub}</div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -191,23 +135,18 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState }) {
     ? (importMeta?.filename || 'Imported Data')
     : 'Demo Data';
 
-  const { 
-    totalOrders, 
-    claimedOrders, 
-    logisticsAssigned, 
+  const {
+    claimedOrders,
+    logisticsAssigned,
     activationAssigned,
-    avgClaimTimeSec,
-    avgLogisticsAssignTimeSec,
-    avgActivationAssignTimeSec,
-    avgTotalJourneySec,
-    salesSLA,
-    logisticsSLA,
-    activationSLA,
+    salesAvgClaimTimeSec,
+    salesAvgAssignTimeSec,
+    logisticsAvgClaimTimeSec,
+    logisticsAvgActivationTimeSec,
+    activationAvgClaimTimeSec,
+    activationAvgHandleTimeSec,
+    totalHandlingTimeSec,
   } = data;
-
-  const claimRate = totalOrders > 0 ? Math.round((claimedOrders / totalOrders) * 100) : 0;
-  const logisticsRate = claimedOrders > 0 ? Math.round((logisticsAssigned / claimedOrders) * 100) : 0;
-  const activationRate = logisticsAssigned > 0 ? Math.round((activationAssigned / logisticsAssigned) * 100) : 0;
 
   return (
     <div className="hero-badge dashboard-hero">
@@ -219,132 +158,84 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState }) {
         Full Order Journey · {label} · {src}
       </div>
 
-      <div className="journey-container">
-        <div className="journey-stages">
-          <JourneyStage
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
-                <line x1="3" y1="6" x2="21" y2="6"/>
-                <path d="M16 10a4 4 0 0 1-8 0"/>
-              </svg>
-            }
-            title="Orders Created"
-            count={totalOrders}
-            avgTime={0}
-            color={STAGE_COLORS.created}
-            conversionRate={null}
-            subtitle="Starting point"
-            showSLA={false}
-          />
+      {/* ── Pipeline stages ── */}
+      <div className="journey-stages" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        <StageCard
+          icon={
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          }
+          title="Orders Claimed"
+          count={claimedOrders}
+          avgTime={salesAvgClaimTimeSec}
+          color={COLORS.claimed}
+          timeLabel="avg claim time"
+        />
 
-          <JourneyStage
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            }
-            title="Orders Claimed"
-            count={claimedOrders}
-            avgTime={avgClaimTimeSec}
-            color={STAGE_COLORS.claimed}
-            conversionRate={claimRate}
-            subtitle="Sales claim"
-            slaExceeded={salesSLA?.avgWorkingMinutes > 120}
-            slaMinutes={salesSLA?.avgWorkingMinutes}
-          />
+        <StageCard
+          icon={
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="1" y="3" width="15" height="13"/>
+              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/>
+              <circle cx="5.5" cy="18.5" r="2.5"/>
+              <circle cx="18.5" cy="18.5" r="2.5"/>
+            </svg>
+          }
+          title="Assigned to Logistics"
+          count={logisticsAssigned}
+          avgTime={logisticsAvgClaimTimeSec}
+          color={COLORS.logistics}
+          timeLabel="avg claim time"
+        />
 
-          <JourneyStage
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="1" y="3" width="15" height="13"/>
-                <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/>
-                <circle cx="5.5" cy="18.5" r="2.5"/>
-                <circle cx="18.5" cy="18.5" r="2.5"/>
-              </svg>
-            }
-            title="Assigned to Logistics"
-            count={logisticsAssigned}
-            avgTime={avgLogisticsAssignTimeSec}
-            color={STAGE_COLORS.logistics}
-            conversionRate={logisticsRate}
-            subtitle="Logistics assignment"
-            slaExceeded={logisticsSLA?.avgWorkingMinutes > 120}
-            slaMinutes={logisticsSLA?.avgWorkingMinutes}
-          />
-
-          <JourneyStage
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-                <path d="M2 17l10 5 10-5"/>
-                <path d="M2 12l10 5 10-5"/>
-              </svg>
-            }
-            title="Assigned to Activation"
-            count={activationAssigned}
-            avgTime={avgActivationAssignTimeSec}
-            color={STAGE_COLORS.activation}
-            isLast={true}
-            conversionRate={activationRate}
-            subtitle="Activation assignment"
-            slaExceeded={activationSLA?.avgWorkingMinutes > 120}
-            slaMinutes={activationSLA?.avgWorkingMinutes}
-          />
-        </div>
-
-        <TotalJourneyCard 
-          avgTotalTime={avgTotalJourneySec} 
-          totalOrders={totalOrders}
+        <StageCard
+          isLast
+          icon={
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+              <path d="M2 17l10 5 10-5"/>
+              <path d="M2 12l10 5 10-5"/>
+            </svg>
+          }
+          title="Assigned to Activation"
+          count={activationAssigned}
+          avgTime={activationAvgClaimTimeSec}
+          color={COLORS.activation}
+          timeLabel="time to attend"
         />
       </div>
+
+      {/* ── Handling times ── */}
+      <HandlingSection
+        sales={salesAvgAssignTimeSec}
+        logistics={logisticsAvgActivationTimeSec}
+        activation={activationAvgHandleTimeSec}
+        total={totalHandlingTimeSec}
+      />
     </div>
   );
 }
 
 // ─── MAIN PAGE ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const [loadState, setLoadState]     = useState('loading');
-  const [importMeta, setImportMeta]   = useState(null);
-  const [allOrders, setAllOrders]     = useState([]);
-  const [currentRange, setCurrentRange] = useState('month');
-  const [customDates, setCustomDates] = useState({ from: '', to: '' });
-  const [slaSettings, setSlaSettings] = useState(DEFAULT_SLA);
+  const [loadState, setLoadState]         = useState('loading');
+  const [importMeta, setImportMeta]       = useState(null);
+  const [allOrders, setAllOrders]         = useState([]);
+  const [allLogisticsOrders, setAllLogisticsOrders] = useState([]);
+  const [allActivationOrders, setAllActivationOrders] = useState([]);
+  const [currentRange, setCurrentRange]   = useState(() => localStorage.getItem('tpw_filter_range') || 'month');
+  const [customDates, setCustomDates]     = useState(() => ({
+    from: localStorage.getItem('tpw_filter_from') || '',
+    to:   localStorage.getItem('tpw_filter_to')   || '',
+  }));
 
-  useEffect(() => {
-    loadData();
-    loadSLASettings();
-  }, []);
-
-  async function loadSLASettings() {
-    try {
-      const slaSnap = await getDocs(query(collection(db, 'slaSettings'), limit(1)));
-      if (!slaSnap.empty) {
-        const data = slaSnap.docs[0].data();
-        // Convert minutes to seconds
-        setSlaSettings({
-          sales: {
-            workingHours: (data.sales?.workingHours || 120) * 60,
-            nonWorkingHours: (data.sales?.nonWorkingHours || 120) * 60,
-          },
-          logistics: {
-            workingHours: (data.logistics?.workingHours || 120) * 60,
-            nonWorkingHours: (data.logistics?.nonWorkingHours || 120) * 60,
-          },
-          activation: {
-            workingHours: (data.activation?.workingHours || 120) * 60,
-            nonWorkingHours: (data.activation?.nonWorkingHours || 120) * 60,
-          },
-        });
-      }
-    } catch (err) {
-      console.error('Error loading SLA:', err);
-    }
-  }
+  useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoadState('loading');
     try {
+      // Check if there are any imports first
       const q    = query(collection(db, 'imports'), orderBy('importedAt', 'desc'), limit(1));
       const snap = await getDocs(q);
 
@@ -354,29 +245,57 @@ export default function Dashboard() {
         return;
       }
 
-      const docSnap   = snap.docs[0];
-      const meta      = { id: docSnap.id, ...docSnap.data() };
+      const docSnap = snap.docs[0];
+      const meta    = { id: docSnap.id, ...docSnap.data() };
       setImportMeta(meta);
 
-      // Load orders with all timestamps for journey calculation
-      const ordersSnap = await getDocs(query(
-        collection(db, 'imports', docSnap.id, 'orders'), 
-        orderBy('orderDT', 'desc'), 
-        limit(5000)
-      ));
-      
+      // Load from global collections (deduplicated across all imports)
+      // Limited to recent 30000 for performance with large datasets
+      const [ordersSnap, logisticsSnap, activationSnap] = await Promise.all([
+        getDocs(query(
+          collection(db, 'orders'),
+          orderBy('orderDT', 'desc'),
+          limit(10000)
+        )),
+        getDocs(query(
+          collection(db, 'logisticsOrders'),
+          orderBy('assignDT', 'desc'),
+          limit(10000)
+        )),
+        getDocs(query(
+          collection(db, 'activationOrders'),
+          orderBy('assignDT', 'desc'),
+          limit(10000)
+        )),
+      ]);
+
       const orders = ordersSnap.docs.map(d => {
         const data = d.data();
         return {
           ...data,
           orderDT: data.orderDT?.toDate ? data.orderDT.toDate() : null,
-          claimDT: data.claimDT?.toDate ? data.claimDT.toDate() : null,
-          logisticsAssignDT: data.logisticsAssignDT?.toDate ? data.logisticsAssignDT.toDate() : null,
-          activationAssignDT: data.activationAssignDT?.toDate ? data.activationAssignDT.toDate() : null,
         };
       });
 
+      const logisticsOrders = logisticsSnap.docs.map(d => {
+        const data = d.data();
+        return {
+          ...data,
+          assignDT: data.assignDT?.toDate ? data.assignDT.toDate() : null,
+        };
+      });
+
+      const activationOrders = activationSnap.docs.map(d => {
+        const data = d.data();
+        return {
+          ...data,
+          assignDT: data.assignDT?.toDate ? data.assignDT.toDate() : null,
+        };
+      }).filter(o => o.assignDT);
+
       setAllOrders(orders);
+      setAllLogisticsOrders(logisticsOrders);
+      setAllActivationOrders(activationOrders);
       setLoadState('loaded');
       localStorage.setItem('tpw_data_source', 'live');
     } catch (err) {
@@ -387,84 +306,87 @@ export default function Dashboard() {
   }
 
   const stats = useMemo(() => {
-    if (loadState === 'loading') return DEMO_STATS;
-
-    if (loadState === 'demo' || loadState === 'error') {
-      const mult = currentRange === 'custom'
-        ? Math.max(1, customDates.from && customDates.to
-            ? (Math.round((new Date(customDates.to) - new Date(customDates.from)) / 86400000) + 1) / 30
-            : 1)
-        : (DEMO_MULTIPLIERS[currentRange] ?? 1);
-
+    if (loadState === 'loading' || loadState === 'demo' || loadState === 'error') {
+      // No demo data - return zeros when no real data available
       return {
-        totalOrders: Math.round(DEMO_STATS.totalOrders * mult),
-        claimedOrders: Math.round(DEMO_STATS.claimedOrders * mult),
-        logisticsAssigned: Math.round(DEMO_STATS.logisticsAssigned * mult),
-        activationAssigned: Math.round(DEMO_STATS.activationAssigned * mult),
-        avgClaimTimeSec: Math.round(DEMO_STATS.avgClaimTimeSec * (0.88 + Math.random() * 0.24)),
-        avgLogisticsAssignTimeSec: Math.round(DEMO_STATS.avgLogisticsAssignTimeSec * (0.88 + Math.random() * 0.24)),
-        avgActivationAssignTimeSec: Math.round(DEMO_STATS.avgActivationAssignTimeSec * (0.88 + Math.random() * 0.24)),
-        avgTotalJourneySec: Math.round(DEMO_STATS.avgTotalJourneySec * (0.88 + Math.random() * 0.24)),
+        claimedOrders:                0,
+        logisticsAssigned:            0,
+        activationAssigned:           0,
+        salesAvgClaimTimeSec:         0,
+        salesAvgAssignTimeSec:        0,
+        logisticsAvgClaimTimeSec:     0,
+        logisticsAvgActivationTimeSec: 0,
+        activationAvgClaimTimeSec:    0,
+        activationAvgHandleTimeSec:   0,
+        totalHandlingTimeSec:         0,
       };
     }
 
-    // Live data calculation
+    // ── Live data ──────────────────────────────────────────────────────────────
     const bounds = getRangeBounds(currentRange, customDates);
-    const filteredOrders = bounds
+
+    const salesOrders = bounds
       ? allOrders.filter(o => o.orderDT && o.orderDT >= bounds.from && o.orderDT <= bounds.to)
       : allOrders;
 
-    // Filter out bad handling orders (> 1000 min claim time)
-    const validOrders = filteredOrders.filter(o => {
-      if (!o.claimTimeSec) return true;
-      return o.claimTimeSec <= BAD_HANDLING_THRESHOLD_SEC;
-    });
+    const logisticsFiltered = bounds
+      ? allLogisticsOrders.filter(o => o.assignDT && o.assignDT >= bounds.from && o.assignDT <= bounds.to)
+      : allLogisticsOrders;
 
-    const totalOrders = validOrders.length;
-    const claimedOrders = validOrders.filter(o => o.claimed).length;
-    const logisticsAssigned = validOrders.filter(o => o.logisticsAssignDT).length;
-    const activationAssigned = validOrders.filter(o => o.activationAssignDT).length;
+    const activationFiltered = bounds
+      ? allActivationOrders.filter(o => o.assignDT && o.assignDT >= bounds.from && o.assignDT <= bounds.to)
+      : allActivationOrders;
 
-    // Calculate SLA metrics using working minutes
-    const slaConfig = {
-      sales: { workingHours: (slaSettings?.sales?.workingHours || 120), nonWorkingHours: (slaSettings?.sales?.nonWorkingHours || 120) },
-      logistics: { workingHours: (slaSettings?.logistics?.workingHours || 120), nonWorkingHours: (slaSettings?.logistics?.nonWorkingHours || 120) },
-      activation: { workingHours: (slaSettings?.activation?.workingHours || 120), nonWorkingHours: (slaSettings?.activation?.nonWorkingHours || 120) },
-    };
+    // Counts
+    const claimedOrders    = salesOrders.filter(o => o.claimed).length;
+    const logisticsAssigned  = logisticsFiltered.length;
+    const activationAssigned = activationFiltered.length;
 
-    // Calculate SLA metrics for each department
-    const salesSLA = calculateSLAMetrics(validOrders, 'sales', slaConfig.sales);
-    const logisticsSLA = calculateSLAMetrics(validOrders.filter(o => o.logisticsAssignDT), 'logistics', slaConfig.logistics);
-    const activationSLA = calculateSLAMetrics(validOrders.filter(o => o.activationAssignDT), 'activation', slaConfig.activation);
+    // Sales metrics — same filtering as AgentsPerformance
+    const salesClaimTimes  = salesOrders
+      .map(o => o.claimTimeSec)
+      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+    const salesAssignTimes = salesOrders
+      .map(o => o.assignTimeSec)
+      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
 
-    // Convert working minutes to seconds for display
-    const avgClaimTimeSec = salesSLA.avgWorkingMinutes * 60;
-    const avgLogisticsAssignTimeSec = logisticsSLA.avgWorkingMinutes * 60;
-    const avgActivationAssignTimeSec = activationSLA.avgWorkingMinutes * 60;
+    // Logistics metrics — same filtering as LogisticsPerformance
+    const logisticsClaimTimes = logisticsFiltered
+      .map(o => o.claimTimeSec)
+      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+    const logisticsActivationTimes = logisticsFiltered
+      .map(o => o.activationAssignTimeSec)
+      .filter(v => v != null && v >= 0 && v <= BAD_HANDLING_THRESHOLD_SEC);
 
-    const totalJourneyTimes = validOrders
-      .filter(o => o.orderDT && o.activationAssignDT)
-      .map(o => (o.activationAssignDT - o.orderDT) / 1000)
-      .filter(t => t >= 0 && t < 86400 * 7); // Max 7 days
+    // Activation metrics — same filtering as ActivationPerformance
+    const activationClaimTimes = activationFiltered
+      .map(o => o.claimTimeSec)
+      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+    const activationHandleTimes = activationFiltered
+      .map(o => o.handleTimeSec)
+      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+
+    const salesAvgAssignTimeSec         = Math.round(avg(salesAssignTimes));
+    const logisticsAvgActivationTimeSec = Math.round(avg(logisticsActivationTimes));
+    const activationAvgHandleTimeSec    = Math.round(avg(activationHandleTimes));
 
     return {
-      totalOrders,
       claimedOrders,
       logisticsAssigned,
       activationAssigned,
-      avgClaimTimeSec,
-      avgLogisticsAssignTimeSec,
-      avgActivationAssignTimeSec,
-      avgTotalJourneySec: Math.round(avg(totalJourneyTimes)),
-      // SLA data
-      salesSLA,
-      logisticsSLA,
-      activationSLA,
+      salesAvgClaimTimeSec:         Math.round(avg(salesClaimTimes)),
+      salesAvgAssignTimeSec,
+      logisticsAvgClaimTimeSec:     Math.round(avg(logisticsClaimTimes)),
+      logisticsAvgActivationTimeSec,
+      activationAvgClaimTimeSec:    Math.round(avg(activationClaimTimes)),
+      activationAvgHandleTimeSec,
+      totalHandlingTimeSec:         salesAvgAssignTimeSec + logisticsAvgActivationTimeSec + activationAvgHandleTimeSec,
     };
-  }, [loadState, allOrders, currentRange, customDates]);
+  }, [loadState, allOrders, allLogisticsOrders, allActivationOrders, currentRange, customDates]);
 
   function handleRangeChange(range) {
     setCurrentRange(range);
+    localStorage.setItem('tpw_filter_range', range);
   }
 
   const label = currentRange === 'custom'
@@ -486,45 +408,58 @@ export default function Dashboard() {
                   Showing data for: <strong>{label}</strong>
                   {loadState === 'demo' && (
                     <span style={{ color: 'rgba(216,245,236,0.4)', marginLeft: '8px' }}>
-                      (demo mode — import a CSV via Admin to see live data)
+                      (no data — import a CSV via Admin to see data)
                     </span>
                   )}
                 </p>
               </div>
 
-              {/* Filter bar */}
-              <div className="filter-bar">
-                {['today','yesterday','week','month','mtd','quarter','annual'].map(r => (
-                  <button
-                    key={r}
-                    className={`filter-btn${currentRange === r ? ' active' : ''}`}
-                    onClick={() => handleRangeChange(r)}
-                  >
-                    {FILTER_LABELS[r]}
-                  </button>
-                ))}
-                <div className="filter-separator" />
-                <div className="filter-custom">
-                  <span>From</span>
-                  <input
-                    type="date"
-                    value={customDates.from}
-                    onChange={(e) => {
-                      setCustomDates(d => ({ ...d, from: e.target.value }));
-                      setCurrentRange('custom');
-                    }}
-                    aria-label="Custom date from"
-                  />
-                  <span>To</span>
-                  <input
-                    type="date"
-                    value={customDates.to}
-                    onChange={(e) => {
-                      setCustomDates(d => ({ ...d, to: e.target.value }));
-                      setCurrentRange('custom');
-                    }}
-                    aria-label="Custom date to"
-                  />
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+                <button className="pdf-btn" onClick={() => window.print()}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  Save as PDF
+                </button>
+                <div className="filter-bar">
+                  {['today','yesterday','week','lastmonth','month','mtd','quarter','annual'].map(r => (
+                    <button
+                      key={r}
+                      className={`filter-btn${currentRange === r ? ' active' : ''}`}
+                      onClick={() => handleRangeChange(r)}
+                    >
+                      {FILTER_LABELS[r]}
+                    </button>
+                  ))}
+                  <div className="filter-separator" />
+                  <div className="filter-custom">
+                    <span>From</span>
+                    <input
+                      type="date"
+                      value={customDates.from}
+                      onChange={(e) => {
+                        setCustomDates(d => ({ ...d, from: e.target.value }));
+                        setCurrentRange('custom');
+                        localStorage.setItem('tpw_filter_range', 'custom');
+                        localStorage.setItem('tpw_filter_from', e.target.value);
+                      }}
+                      aria-label="Custom date from"
+                    />
+                    <span>To</span>
+                    <input
+                      type="date"
+                      value={customDates.to}
+                      onChange={(e) => {
+                        setCustomDates(d => ({ ...d, to: e.target.value }));
+                        setCurrentRange('custom');
+                        localStorage.setItem('tpw_filter_range', 'custom');
+                        localStorage.setItem('tpw_filter_to', e.target.value);
+                      }}
+                      aria-label="Custom date to"
+                    />
+                  </div>
                 </div>
               </div>
             </div>

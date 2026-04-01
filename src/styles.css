@@ -2184,6 +2184,61 @@ td {
   border-radius: 20px;
 }
 
+/* ─── Dashboard Handling Times Section ──────────────────────────────────────── */
+.dash-handling-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(216, 245, 236, 0.08);
+}
+
+.dash-handling-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(216, 245, 236, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 14px;
+}
+
+.dash-handling-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.dash-handling-card {
+  background: rgba(13, 26, 19, 0.35);
+  border: 1px solid rgba(216, 245, 236, 0.08);
+  border-radius: 14px;
+  padding: 18px 16px;
+  transition: border-color 0.2s;
+}
+
+.dash-handling-card:last-child {
+  background: rgba(26, 188, 156, 0.06);
+}
+
+.dash-handling-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 8px;
+}
+
+.dash-handling-time {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  margin-bottom: 4px;
+}
+
+.dash-handling-sub {
+  font-size: 11px;
+  color: rgba(216, 245, 236, 0.3);
+}
+
 .total-journey-card {
   background: rgba(13, 26, 19, 0.5);
   border: 1px solid rgba(216, 245, 236, 0.12);
@@ -2689,6 +2744,9 @@ td {
   .stage-connector {
     display: none;
   }
+  .dash-handling-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
   .dashboard-summary {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -2726,10 +2784,239 @@ td {
   .dashboard-summary {
     grid-template-columns: 1fr;
   }
+  .dash-handling-row {
+    grid-template-columns: 1fr;
+  }
   .stage-count {
     font-size: 28px;
   }
   .total-journey-time {
     font-size: 36px;
   }
+}
+
+/* ─── PDF BUTTON ─────────────────────────────────────────────────────────────── */
+.pdf-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background: rgba(46, 204, 138, 0.12);
+  border: 1px solid rgba(46, 204, 138, 0.3);
+  border-radius: 8px;
+  color: var(--emerald);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.pdf-btn:hover {
+  background: rgba(46, 204, 138, 0.2);
+  border-color: rgba(46, 204, 138, 0.5);
+}
+.pdf-btn svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+/* ─── PRINT / SAVE AS PDF ────────────────────────────────────────────────────── */
+@media print {
+  @page {
+    margin: 5mm 6mm;
+    size: A4 landscape;
+  }
+
+  html {
+    zoom: 0.65;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Override CSS variables so all var(--mint) / var(--text-dim) etc. resolve to dark print colours */
+  :root {
+    --mint:      #1a1a1a !important;
+    --text-dim:  #555555 !important;
+    --text-mid:  #333333 !important;
+    --card-bg:   #ffffff !important;
+    --border:    #dddddd !important;
+    --evergreen: #ffffff !important;
+  }
+
+  body {
+    background: #fff !important;
+    color: #1a1a1a !important;
+    font-size: 11px !important;
+  }
+
+  /* Remove blur effects that prevent table content from rendering in print */
+  .table-wrap,
+  .hero-badge,
+  .nav {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Hide UI chrome */
+  .nav,
+  .filter-bar,
+  .pdf-btn,
+  .table-footer .pagination { display: none !important; }
+
+  .page { padding: 0 !important; }
+
+  /* Page header */
+  .page-header {
+    margin-bottom: 16px !important;
+    padding-bottom: 12px !important;
+    border-bottom: 1px solid #ccc !important;
+  }
+  .page-header h1 { color: #1a1a1a !important; font-size: 18px !important; }
+  .page-header p  { color: #555 !important; }
+
+  /* Hero badge */
+  .hero-badge {
+    background: #f3f9f6 !important;
+    border: 1px solid #c5ddd5 !important;
+    color: #1a1a1a !important;
+    margin-bottom: 16px !important;
+  }
+  .hero-badge-label,
+  .hero-badge-title { color: #1a1a1a !important; }
+  .dot { background: #2ECC8A !important; }
+  .hero-kpi-value,
+  .hero-kpi-label  { color: #1a1a1a !important; }
+  .hero-kpi-badge  { color: #555 !important; background: #eee !important; }
+
+  /* Journey stages (Dashboard) */
+  .journey-stage   { border: 1px solid #ddd !important; background: #fafafa !important; }
+  .dash-handling-card { border: 1px solid #ddd !important; background: #fafafa !important; }
+  .dash-handling-label, .dash-handling-sub { color: #555 !important; }
+  .stage-title,
+  .stage-count-sub,
+  .stage-subtitle,
+  .stage-avg-main  { color: #1a1a1a !important; }
+
+  /* Dashboard hero banner: all elements in one line */
+  .dashboard-hero {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 12px !important;
+    padding: 16px !important;
+  }
+  .dashboard-hero .hero-badge-label,
+  .dashboard-hero .hero-badge-title {
+    width: 100% !important;
+    margin-bottom: 4px !important;
+  }
+  .dashboard-hero .journey-stages {
+    display: flex !important;
+    flex: 3 !important;
+    gap: 8px !important;
+  }
+  .dashboard-hero .journey-stage {
+    flex: 1 !important;
+    padding: 10px 8px !important;
+    border-radius: 8px !important;
+  }
+  .dashboard-hero .stage-header { margin-bottom: 8px !important; }
+  .dashboard-hero .stage-icon-wrap {
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 8px !important;
+  }
+  .dashboard-hero .stage-icon svg {
+    width: 18px !important;
+    height: 18px !important;
+  }
+  .dashboard-hero .stage-connector { margin-right: -8px !important; }
+  .dashboard-hero .stage-title { font-size: 9px !important; margin-bottom: 4px !important; }
+  .dashboard-hero .stage-avg-main { font-size: 18px !important; margin-bottom: 2px !important; }
+  .dashboard-hero .stage-count-sub { font-size: 10px !important; margin-bottom: 4px !important; }
+  .dashboard-hero .stage-subtitle { font-size: 9px !important; margin-bottom: 0 !important; }
+
+  .dashboard-hero .dash-handling-section {
+    flex: 4 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    border-top: none !important;
+  }
+  .dashboard-hero .dash-handling-header { display: none !important; }
+  .dashboard-hero .dash-handling-row {
+    display: flex !important;
+    gap: 8px !important;
+  }
+  .dashboard-hero .dash-handling-card {
+    flex: 1 !important;
+    padding: 10px 8px !important;
+    border-radius: 8px !important;
+  }
+  .dashboard-hero .dash-handling-label { font-size: 9px !important; margin-bottom: 4px !important; }
+  .dashboard-hero .dash-handling-time { font-size: 18px !important; }
+  .dashboard-hero .dash-handling-sub { font-size: 9px !important; }
+
+  .total-journey-card { background: #f3f9f6 !important; border: 1px solid #c5ddd5 !important; }
+  .total-journey-title,
+  .total-journey-subtitle,
+  .total-journey-avg,
+  .total-journey-note { color: #1a1a1a !important; }
+
+  /* Table */
+  .section-header { margin-bottom: 8px !important; }
+  .section-title  { color: #1a1a1a !important; }
+  .section-sub    { color: #555 !important; }
+  .search-wrap    { display: none !important; }
+
+  .table-wrap {
+    overflow: visible !important;
+    background: #fff !important;
+    border: 1px solid #ddd !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+  }
+
+  table { width: 100% !important; border-collapse: collapse !important; }
+  thead { background: #f5f5f5 !important; }
+  th    {
+    color: #333 !important;
+    background: #f0f0f0 !important;
+    border-bottom: 2px solid #ccc !important;
+    padding: 6px 8px !important;
+    font-size: 10px !important;
+  }
+  td {
+    color: #1a1a1a !important;
+    border-bottom: 1px solid #eee !important;
+    padding: 5px 8px !important;
+    font-size: 10px !important;
+  }
+  tr { page-break-inside: avoid !important; }
+
+  .agent-avatar { width: 26px !important; height: 26px !important; font-size: 9px !important; }
+  .agent-name   { color: #1a1a1a !important; font-size: 10px !important; }
+  .agent-role   { color: #555 !important; display: block !important; font-size: 9px !important; }
+
+  .mini-bar-track { background: #e0e0e0 !important; }
+
+  .status-pill  { border: 1px solid #ccc !important; font-size: 9px !important; }
+  .pill-active  { background: #d4f4e8 !important; color: #1a6e40 !important; }
+  .pill-away    { background: #fff3cd !important; color: #856404 !important; }
+  .pill-offline { background: #f0f0f0 !important; color: #666 !important; }
+
+  .trend-up   { color: #1a6e40 !important; }
+  .trend-down { color: #c0392b !important; }
+  .trend-neu  { color: #666 !important; }
+
+  .table-footer { display: none !important; }
+
+  .num-cell { color: #1a1a1a !important; }
 }

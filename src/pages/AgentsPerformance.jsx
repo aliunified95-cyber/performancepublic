@@ -10,6 +10,7 @@ import {
 import { db } from '../firebase';
 import Navbar from '../components/Navbar';
 import { calculateSLAMetrics, WORKING_HOURS } from '../utils/sla';
+import AgentDetailModal from '../components/AgentDetailModal';
 
 // ─── COLORS ────────────────────────────────────────────────────────────────────
 const COLORS = [
@@ -18,34 +19,15 @@ const COLORS = [
   '#C0392B','#2980B9','#27AE60','#D35400','#E91E8C',
 ];
 
-// ─── DEMO DATA ─────────────────────────────────────────────────────────────────
 // Threshold for bad handling: 1000 minutes = 60000 seconds
 const BAD_HANDLING_THRESHOLD_SEC = 60000;
 
 // Default SLA: 2 hours = 7200 seconds
 const DEFAULT_SLA_SECONDS = 7200;
 
-const DEMO_AGENTS = [
-  { name:'Sarah Mitchell',  role:'Senior Agent', initials:'SM', color:COLORS[0],  total:178, claimed:162, claimTimeSec:198,  assignTimeSec:52,  badHandlingCount: 2, status:'active',  trend:'up' },
-  { name:'James Okafor',    role:'Sales Agent',  initials:'JO', color:COLORS[1],  total:154, claimed:138, claimTimeSec:245,  assignTimeSec:67,  badHandlingCount: 1, status:'active',  trend:'up' },
-  { name:'Priya Sharma',    role:'Sales Agent',  initials:'PS', color:COLORS[2],  total:143, claimed:121, claimTimeSec:302,  assignTimeSec:74,  badHandlingCount: 5, status:'away',    trend:'down' },
-  { name:'Carlos Reyes',    role:'Senior Agent', initials:'CR', color:COLORS[3],  total:137, claimed:130, claimTimeSec:180,  assignTimeSec:48,  badHandlingCount: 0, status:'active',  trend:'up' },
-  { name:'Yuki Tanaka',     role:'Sales Agent',  initials:'YT', color:COLORS[4],  total:129, claimed:107, claimTimeSec:355,  assignTimeSec:91,  badHandlingCount: 3, status:'active',  trend:'neutral' },
-  { name:'Amara Diallo',    role:'Sales Agent',  initials:'AD', color:COLORS[5],  total:124, claimed:110, claimTimeSec:270,  assignTimeSec:60,  badHandlingCount: 1, status:'offline', trend:'down' },
-  { name:'Liam Brennan',    role:'Junior Agent', initials:'LB', color:COLORS[6],  total:108, claimed:88,  claimTimeSec:420,  assignTimeSec:110, badHandlingCount: 8, status:'active',  trend:'up' },
-  { name:'Fatima Al-Zahra', role:'Sales Agent',  initials:'FA', color:COLORS[7],  total:101, claimed:91,  claimTimeSec:315,  assignTimeSec:80,  badHandlingCount: 2, status:'away',    trend:'neutral' },
-  { name:'Noah Williams',   role:'Junior Agent', initials:'NW', color:COLORS[8],  total:96,  claimed:74,  claimTimeSec:480,  assignTimeSec:120, badHandlingCount: 12, status:'offline', trend:'down' },
-  { name:'Elena Kovacs',    role:'Sales Agent',  initials:'EK', color:COLORS[9],  total:114, claimed:98,  claimTimeSec:260,  assignTimeSec:58,  badHandlingCount: 1, status:'active',  trend:'up' },
-];
-
-const DEMO_MULTIPLIERS = {
-  today: 0.035, yesterday: 0.033, week: 0.22,
-  month: 1, mtd: 0.70, quarter: 3.1, annual: 12.5,
-};
-
 const FILTER_LABELS = {
   today:'Today', yesterday:'Yesterday', week:'This Week',
-  month:'This Month', mtd:'Month to Date', quarter:'This Quarter', annual:'This Year',
+  lastmonth:'Last Month', month:'This Month', mtd:'Month to Date', quarter:'This Quarter', annual:'This Year',
 };
 
 const ROWS_PER_PAGE = 1000;
@@ -81,6 +63,7 @@ function getRangeBounds(range, customDates) {
   if (range === 'mtd')       return { from: new Date(y, mo, 1),                to: now };
   if (range === 'quarter')   return { from: new Date(y, Math.floor(mo / 3) * 3, 1), to: now };
   if (range === 'annual')    return { from: new Date(y, 0, 1),                 to: now };
+  if (range === 'lastmonth') return { from: new Date(y, mo - 1, 1, 0, 0, 0),  to: new Date(y, mo, 0, 23, 59, 59) };
   if (range === 'custom' && customDates.from && customDates.to) {
     return {
       from: new Date(customDates.from + 'T00:00:00'),
@@ -215,7 +198,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
   );
 }
 
-function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPage, slaMinutes }) {
+function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPage, slaMinutes, onAgentClick }) {
   const slaSeconds = (slaMinutes || 120) * 60;
   const query2 = searchQuery.toLowerCase();
   let filtered = data.filter(a =>
@@ -319,12 +302,17 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
               return (
                 <tr key={agent.name + i}>
                   <td>
-                    <div className="agent-cell">
+                    <div 
+                      className="agent-cell" 
+                      onClick={() => onAgentClick(agent)}
+                      style={{ cursor: 'pointer' }}
+                      title="Click to view detailed breakdown"
+                    >
                       <div className="agent-avatar" style={{ background: agent.color }}>
                         {agent.initials}
                       </div>
                       <div>
-                        <div className="agent-name">{agent.name}</div>
+                        <div className="agent-name" style={{ color: '#3A7BD5' }}>{agent.name}</div>
                         <div className="agent-role">{agent.role || 'Sales Agent'}</div>
                       </div>
                     </div>
@@ -422,12 +410,17 @@ export default function AgentsPerformance() {
   const [importMeta, setImportMeta]   = useState(null);
   const [allOrders, setAllOrders]     = useState([]);
   const [agentMappings, setAgentMappings] = useState([]);
-  const [currentRange, setCurrentRange] = useState('month');
-  const [customDates, setCustomDates] = useState({ from: '', to: '' });
+  const [currentRange, setCurrentRange] = useState(() => localStorage.getItem('tpw_filter_range') || 'month');
+  const [customDates, setCustomDates] = useState(() => ({
+    from: localStorage.getItem('tpw_filter_from') || '',
+    to:   localStorage.getItem('tpw_filter_to')   || '',
+  }));
   const [searchQuery, setSearchQuery] = useState('');
   const [sortState, setSortState]     = useState({ col: 'total', dir: 'desc' });
   const [page, setPage]               = useState(1);
   const [slaSettings, setSlaSettings] = useState({ sales: { workingHours: DEFAULT_SLA_SECONDS / 60, nonWorkingHours: DEFAULT_SLA_SECONDS / 60 } });
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -451,6 +444,7 @@ export default function AgentsPerformance() {
   async function loadData() {
     setLoadState('loading');
     try {
+      // Check if there are any imports first
       const q    = query(collection(db, 'imports'), orderBy('importedAt', 'desc'), limit(1));
       const snap = await getDocs(q);
 
@@ -464,8 +458,9 @@ export default function AgentsPerformance() {
       const meta      = { id: docSnap.id, ...docSnap.data() };
       setImportMeta(meta);
 
-      // Load orders subcollection (limited to recent 5000 for performance)
-      const ordersSnap = await getDocs(query(collection(db, 'imports', docSnap.id, 'orders'), orderBy('orderDT', 'desc'), limit(5000)));
+      // Load from global orders collection (deduplicated across all imports)
+      // Limited to recent 30000 for performance with large datasets
+      const ordersSnap = await getDocs(query(collection(db, 'orders'), orderBy('orderDT', 'desc'), limit(10000)));
       const orders = ordersSnap.docs.map(d => {
         const data = d.data();
         return {
@@ -493,19 +488,8 @@ export default function AgentsPerformance() {
     if (loadState === 'loading') return [];
 
     if (loadState === 'demo' || loadState === 'error') {
-      const mult = currentRange === 'custom'
-        ? Math.max(1, customDates.from && customDates.to
-            ? (Math.round((new Date(customDates.to) - new Date(customDates.from)) / 86400000) + 1) / 30
-            : 1)
-        : (DEMO_MULTIPLIERS[currentRange] ?? 1);
-
-      return DEMO_AGENTS.map(a => ({
-        ...a,
-        total:         Math.max(0, Math.round(a.total * mult)),
-        claimed:       Math.max(0, Math.round(a.claimed * mult)),
-        claimTimeSec:  Math.round(a.claimTimeSec  * (0.88 + Math.random() * 0.24)),
-        assignTimeSec: Math.round(a.assignTimeSec * (0.88 + Math.random() * 0.24)),
-      }));
+      // No demo data - return empty array when no real data available
+      return [];
     }
 
     // Live data: aggregate from allOrders
@@ -523,11 +507,19 @@ export default function AgentsPerformance() {
     });
 
     const mappingMap = agentMappings.reduce((acc, m) => {
-      if (m && m.agentCode) acc[m.agentCode] = m;
+      if (m && m.agentCode) acc[m.agentCode.toUpperCase()] = m;
       return acc;
     }, {});
 
-    return Object.values(agentMap).map((a, idx) => {
+    // Filter by agent type: only show sales agents in this dashboard
+    const salesAgents = Object.values(agentMap).filter(a => {
+      const mapping = mappingMap[(a.name || '').toUpperCase()];
+      // If no mapping exists, default to showing (legacy behavior)
+      // If mapping exists, only show if agentType is 'sales'
+      return !mapping || mapping.agentType === 'sales' || !mapping.agentType;
+    });
+
+    return salesAgents.map((a, idx) => {
       const initials = a.name.split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase();
       const color    = COLORS[idx % COLORS.length];
       const claimed  = a.orders.filter(o => o.claimed).length;
@@ -541,9 +533,9 @@ export default function AgentsPerformance() {
         .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
       const assignTimes = a.orders
         .map(o => o.assignTimeSec)
-        .filter(v => v != null && v >= 0 && v < 86400);
+        .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
       
-      const mapping = mappingMap[a.name];
+      const mapping = mappingMap[(a.name || '').toUpperCase()];
       const visible = mapping ? mapping.visible !== false : true;
 
       return {
@@ -559,9 +551,20 @@ export default function AgentsPerformance() {
         status:        'active',
         trend:         'neutral',
         visible,
+        orders:        a.orders, // Pass orders for modal
       };
     }).filter(a => a.total > 0 && a.visible).sort((a, b) => b.total - a.total);
   }, [loadState, allOrders, currentRange, customDates]);
+
+  function handleAgentClick(agent) {
+    setSelectedAgent(agent);
+    setIsModalOpen(true);
+  }
+
+  function handleCloseModal() {
+    setIsModalOpen(false);
+    setSelectedAgent(null);
+  }
 
   function handleSort(col) {
     setSortState(prev => ({
@@ -573,6 +576,7 @@ export default function AgentsPerformance() {
 
   function handleRangeChange(range) {
     setCurrentRange(range);
+    localStorage.setItem('tpw_filter_range', range);
     setPage(1);
   }
 
@@ -595,47 +599,61 @@ export default function AgentsPerformance() {
                   Showing data for: <strong>{label}</strong>
                   {loadState === 'demo' && (
                     <span style={{ color: 'rgba(216,245,236,0.4)', marginLeft: '8px' }}>
-                      (demo mode — import a CSV via Admin to see live data)
+                      (no data — import a CSV via Admin to see data)
                     </span>
                   )}
                 </p>
               </div>
 
-              {/* Filter bar */}
-              <div className="filter-bar">
-                {['today','yesterday','week','month','mtd','quarter','annual'].map(r => (
-                  <button
-                    key={r}
-                    className={`filter-btn${currentRange === r ? ' active' : ''}`}
-                    onClick={() => handleRangeChange(r)}
-                  >
-                    {FILTER_LABELS[r]}
-                  </button>
-                ))}
-                <div className="filter-separator" />
-                <div className="filter-custom">
-                  <span>From</span>
-                  <input
-                    type="date"
-                    value={customDates.from}
-                    onChange={(e) => {
-                      setCustomDates(d => ({ ...d, from: e.target.value }));
-                      setCurrentRange('custom');
-                      setPage(1);
-                    }}
-                    aria-label="Custom date from"
-                  />
-                  <span>To</span>
-                  <input
-                    type="date"
-                    value={customDates.to}
-                    onChange={(e) => {
-                      setCustomDates(d => ({ ...d, to: e.target.value }));
-                      setCurrentRange('custom');
-                      setPage(1);
-                    }}
-                    aria-label="Custom date to"
-                  />
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+                <button className="pdf-btn" onClick={() => window.print()}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  Save as PDF
+                </button>
+                {/* Filter bar */}
+                <div className="filter-bar">
+                  {['today','yesterday','week','lastmonth','month','mtd','quarter','annual'].map(r => (
+                    <button
+                      key={r}
+                      className={`filter-btn${currentRange === r ? ' active' : ''}`}
+                      onClick={() => handleRangeChange(r)}
+                    >
+                      {FILTER_LABELS[r]}
+                    </button>
+                  ))}
+                  <div className="filter-separator" />
+                  <div className="filter-custom">
+                    <span>From</span>
+                    <input
+                      type="date"
+                      value={customDates.from}
+                      onChange={(e) => {
+                        setCustomDates(d => ({ ...d, from: e.target.value }));
+                        setCurrentRange('custom');
+                        localStorage.setItem('tpw_filter_range', 'custom');
+                        localStorage.setItem('tpw_filter_from', e.target.value);
+                        setPage(1);
+                      }}
+                      aria-label="Custom date from"
+                    />
+                    <span>To</span>
+                    <input
+                      type="date"
+                      value={customDates.to}
+                      onChange={(e) => {
+                        setCustomDates(d => ({ ...d, to: e.target.value }));
+                        setCurrentRange('custom');
+                        localStorage.setItem('tpw_filter_range', 'custom');
+                        localStorage.setItem('tpw_filter_to', e.target.value);
+                        setPage(1);
+                      }}
+                      aria-label="Custom date to"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -658,6 +676,14 @@ export default function AgentsPerformance() {
               page={page}
               onPage={setPage}
               slaMinutes={slaSettings?.sales?.workingHours}
+              onAgentClick={handleAgentClick}
+            />
+
+            <AgentDetailModal
+              isOpen={isModalOpen}
+              onClose={handleCloseModal}
+              agent={selectedAgent}
+              teamType="sales"
             />
           </>
         )}
