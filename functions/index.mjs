@@ -3,8 +3,11 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
-import PDFDocument from 'pdfkit';
+import chromium from '@sparticuz/chromium-min';
+import puppeteer from 'puppeteer-core';
 import nodemailer from 'nodemailer';
+
+const CHROMIUM_PACK = 'https://github.com/Sparticuz/chromium/releases/download/v127.0.0/chromium-v127.0.0-pack.tar';
 
 initializeApp();
 const db = getFirestore();
@@ -404,71 +407,133 @@ function buildActivationStats(rows) {
 }
 
 // ─── PDF BUILDER ─────────────────────────────────────────────────────────────
-function buildPDF({ title, department, dateRange, kpis, columns, rows: tableRows }) {
-  return new Promise((resolve, reject) => {
-    const COLORS = {
-      sales:      '#1d4ed8',
-      logistics:  '#b45309',
-      activation: '#065f46',
-      management: '#4c1d95',
-    };
-    const accent = COLORS[department] || '#1d4ed8';
-    const PAGE_W = 595.28;
-    const MARGIN = 40;
-    const COL_W  = (PAGE_W - MARGIN * 2) / columns.length;
-    const ROW_H  = 20;
+function buildPDFHtml({ title, department, dateRange, kpis, columns, rows: tableRows }) {
+  const generatedAt = new Date().toLocaleString('en-GB');
+  const DEPT_COLORS = { sales: '#1d4ed8', logistics: '#b45309', activation: '#065f46', management: '#4c1d95' };
+  const accent = DEPT_COLORS[department] || '#1d4ed8';
 
-    const doc    = new PDFDocument({ margin: MARGIN, size: 'A4' });
-    const chunks = [];
-    doc.on('data',  c => chunks.push(c));
-    doc.on('end',   () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
+  const kpiCards = kpis.map(k => `
+    <div class="kpi-card">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value">${k.value}</div>
+    </div>`).join('');
 
-    // ── Header banner
-    doc.rect(0, 0, PAGE_W, 72).fill(accent);
-    doc.fillColor('white')
-       .fontSize(20).font('Helvetica-Bold').text(title, MARGIN, 18, { width: PAGE_W - MARGIN * 2 });
-    doc.fontSize(10).font('Helvetica').text(dateRange, MARGIN, 46);
+  const ths = columns.map(c => `<th>${c}</th>`).join('');
+  const trs = tableRows.map((row, idx) => `
+    <tr class="${idx % 2 === 1 ? 'even' : ''}">
+      ${row.map(cell => `<td>${cell ?? '—'}</td>`).join('')}
+    </tr>`).join('');
 
-    // ── KPI boxes
-    const KPI_TOP = 90;
-    const KPI_W   = (PAGE_W - MARGIN * 2) / kpis.length;
-    kpis.forEach((kpi, i) => {
-      const x = MARGIN + i * KPI_W;
-      doc.rect(x, KPI_TOP, KPI_W - 8, 52).fill('#f1f5f9').stroke('#cbd5e1');
-      doc.fillColor('#64748b').fontSize(8).font('Helvetica')
-         .text(kpi.label, x + 6, KPI_TOP + 7, { width: KPI_W - 14 });
-      doc.fillColor('#0f172a').fontSize(15).font('Helvetica-Bold')
-         .text(kpi.value, x + 6, KPI_TOP + 20, { width: KPI_W - 14 });
-    });
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+  @page { size: A4 landscape; margin: 8mm 10mm; }
+  *  { box-sizing: border-box; margin: 0; padding: 0;
+       -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: 'Segoe UI', system-ui, Arial, sans-serif;
+         background: #fff; color: #111827; font-size: 10px; }
 
-    // ── Table header
-    let y = KPI_TOP + 64;
-    doc.rect(MARGIN, y, PAGE_W - MARGIN * 2, ROW_H).fill(accent);
-    columns.forEach((col, i) => {
-      doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
-         .text(col, MARGIN + i * COL_W + 4, y + 6, { width: COL_W - 8 });
-    });
-    y += ROW_H;
+  /* ── HEADER ── */
+  .page-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding-bottom: 10px; margin-bottom: 14px;
+    border-bottom: 3px solid #111827;
+  }
+  .period-line  { font-size: 16px; font-weight: 700; color: #111827; letter-spacing: -0.3px; }
+  .sub-line     { font-size: 11px; color: #6b7280; margin-top: 4px; }
+  .right-block  { text-align: right; font-size: 10px; color: #9ca3af; line-height: 1.7; }
+  .right-block strong { color: #374151; display: block; }
 
-    // ── Table rows
-    tableRows.forEach((row, idx) => {
-      if (y > 800) { doc.addPage(); y = MARGIN; }
-      doc.rect(MARGIN, y, PAGE_W - MARGIN * 2, ROW_H).fill(idx % 2 === 0 ? 'white' : '#f8fafc');
-      row.forEach((cell, i) => {
-        doc.fillColor('#1e293b').fontSize(8).font('Helvetica')
-           .text(String(cell ?? '—'), MARGIN + i * COL_W + 4, y + 6, { width: COL_W - 8 });
-      });
-      y += ROW_H;
-    });
+  /* ── KPI GRID ── */
+  .section-label {
+    font-size: 13px; font-weight: 700; color: #111827;
+    margin-bottom: 8px; padding-bottom: 4px;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: ${accent}; flex-shrink: 0; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 14px; }
+  .kpi-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; }
+  .kpi-label { color: #6b7280; font-size: 9px; margin-bottom: 4px; }
+  .kpi-value { color: #111827; font-size: 18px; font-weight: 700; }
 
-    // ── Footer
-    doc.fillColor('#94a3b8').fontSize(7)
-       .text(`Generated: ${new Date().toLocaleString('en-GB')}  ·  Team Performance System`,
-             MARGIN, doc.page.height - 30, { width: PAGE_W - MARGIN * 2, align: 'center' });
+  /* ── TABLE ── */
+  .table-wrap { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; margin-top: 8px; }
+  table  { width: 100%; border-collapse: collapse; }
+  thead  { background: ${accent} !important; }
+  th {
+    background: ${accent}; color: #fff;
+    font-size: 9px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.8px;
+    padding: 8px 12px; text-align: left;
+  }
+  th:first-child { padding-left: 16px; border-radius: 8px 0 0 0; }
+  th:last-child  { border-radius: 0 8px 0 0; }
+  td { color: #111827; font-size: 10px; padding: 6px 12px;
+       border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+  td:first-child { padding-left: 16px; }
+  tr.even td { background: #f9fafb; }
 
-    doc.end();
+  /* ── FOOTER ── */
+  .print-footer {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 16px; padding-top: 8px; border-top: 1px solid #e5e7eb;
+    font-size: 8px; color: #6b7280;
+  }
+</style></head>
+<body>
+  <div class="page-header">
+    <div>
+      <div class="period-line">${title}</div>
+      <div class="sub-line">Generated on: ${generatedAt}</div>
+      <div class="sub-line">Showing data for: <strong style="color:#111827">${dateRange}</strong></div>
+    </div>
+    <div class="right-block">
+      <strong>${title}</strong>
+      <span>${generatedAt}</span>
+    </div>
+  </div>
+
+  <div class="section-label"><span class="dot"></span> Team Overview</div>
+  <div class="kpi-grid">${kpiCards}</div>
+
+  <div class="section-label"><span class="dot"></span> Agent Breakdown</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>${ths}</tr></thead>
+      <tbody>${trs}</tbody>
+    </table>
+  </div>
+
+  <div class="print-footer">
+    <span>Team Performance System</span>
+    <span>${dateRange}</span>
+    <span>Automated report developed by Ali Isa Mohsen 36030791</span>
+  </div>
+</body></html>`;
+}
+
+async function buildPDF(params) {
+  const executablePath = await chromium.executablePath(CHROMIUM_PACK);
+  const browser = await puppeteer.launch({
+    args:            chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath,
+    headless:        chromium.headless,
   });
+  try {
+    const pg = await browser.newPage();
+    await pg.setContent(buildPDFHtml(params), { waitUntil: 'networkidle0' });
+    const pdfBuffer = await pg.pdf({
+      format:          'A4',
+      landscape:       true,
+      printBackground: true,
+      margin: { top: '8mm', right: '10mm', bottom: '8mm', left: '10mm' },
+    });
+    return Buffer.from(pdfBuffer);
+  } finally {
+    await browser.close();
+  }
 }
 
 // ─── EMAIL SENDER ─────────────────────────────────────────────────────────────

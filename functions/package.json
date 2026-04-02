@@ -8,10 +8,11 @@
     "node": "22"
   },
   "dependencies": {
+    "@sparticuz/chromium-min": "^127.0.0",
     "firebase-admin": "^12.7.0",
     "firebase-functions": "^6.3.2",
     "nodemailer": "^8.0.4",
-    "pdfkit": "^0.18.0"
+    "puppeteer-core": "^22.15.0"
   },
   "private": true
 }
