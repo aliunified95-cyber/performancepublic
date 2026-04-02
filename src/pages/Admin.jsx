@@ -21,6 +21,7 @@ import {
 import { signOut } from 'firebase/auth';
 import { db, auth } from '../firebase';
 import Navbar from '../components/Navbar';
+import DeliveryUploadTab from '../components/DeliveryUploadTab';
 import { WORKING_HOURS } from '../utils/sla';
 
 // ─── COLUMN DEFINITIONS ────────────────────────────────────────────────────────
@@ -1998,6 +1999,12 @@ export default function Admin() {
           >
             Email History
           </button>
+          <button
+            className={`tab-btn${activeTab === 'delivery' ? ' active' : ''}`}
+            onClick={() => setActiveTab('delivery')}
+          >
+            Delivery Upload
+          </button>
         </div>
 
         {activeTab === 'import' && (
@@ -2254,6 +2261,10 @@ export default function Admin() {
           </div>
           );
         })()}
+
+        {activeTab === 'delivery' && (
+          <DeliveryUploadTab />
+        )}
       </div>
     </>
   );

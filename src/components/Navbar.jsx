@@ -70,6 +70,12 @@ export default function Navbar({ activeLink }) {
           Activation
         </Link>
         <Link
+          to="/delivery"
+          className={`nav-link${activeLink === 'delivery' ? ' active' : ''}`}
+        >
+          Delivery
+        </Link>
+        <Link
           to="/admin"
           className={`nav-link${activeLink === 'admin' ? ' active' : ''}`}
         >

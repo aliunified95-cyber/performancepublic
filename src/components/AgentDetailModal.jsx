@@ -207,7 +207,7 @@ export default function AgentDetailModal({ isOpen, onClose, agent, teamType, tim
                 color: 'var(--text-dim)',
                 fontSize: '14px',
               }}>
-                {agent.role || `${teamType.charAt(0).toUpperCase() + teamType.slice(1)} Agent`} • {timeData.total.toLocaleString()} orders
+                {agent.role || `${teamType.charAt(0).toUpperCase() + teamType.slice(1)} Agent`} • {agent.orders.length.toLocaleString()} orders{timeData.total < agent.orders.length ? ` (${timeData.total.toLocaleString()} with time data)` : ''}
               </p>
             </div>
           </div>
@@ -423,7 +423,7 @@ export default function AgentDetailModal({ isOpen, onClose, agent, teamType, tim
               color: 'var(--text-dim)',
               lineHeight: 1.5,
             }}>
-              <strong style={{ color: 'var(--mint)' }}>Note:</strong> This distribution shows the breakdown of {timeData.total.toLocaleString()} orders by processing time. 
+              <strong style={{ color: 'var(--mint)' }}>Note:</strong> This distribution shows the breakdown of {timeData.total.toLocaleString()} orders (out of {agent.orders.length.toLocaleString()} total) that have valid time data.
               Orders taking longer than 16 hours are classified as "Bad Handling" and excluded from average calculations on the main dashboard.
             </div>
           )}

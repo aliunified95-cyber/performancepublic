@@ -7,6 +7,7 @@ import Admin from './pages/Admin';
 import AgentsPerformance from './pages/AgentsPerformance';
 import ActivationPerformance from './pages/ActivationPerformance';
 import LogisticsPerformance from './pages/LogisticsPerformance';
+import DeliveryPerformance from './pages/DeliveryPerformance';
 import Dashboard from './pages/Dashboard';
 
 export const AuthContext = createContext({ user: undefined });
@@ -101,6 +102,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <LogisticsPerformance />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/delivery"
+            element={
+              <ProtectedRoute>
+                <DeliveryPerformance />
               </ProtectedRoute>
             }
           />
