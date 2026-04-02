@@ -5,10 +5,14 @@ import {
   doc,
   addDoc,
   setDoc,
+  updateDoc,
+  deleteField,
   writeBatch,
   getDocs,
+  onSnapshot,
   query,
   orderBy,
+  where,
   serverTimestamp,
   Timestamp,
   limit,
@@ -1298,6 +1302,9 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState('import');
   const [emailHistory, setEmailHistory]     = useState([]);
   const [emailHistoryLoading, setEmailHistoryLoading] = useState(false);
+  const [retrying, setRetrying]             = useState(false);
+  const [sendCard, setSendCard]             = useState(null);
+  const sendUnsubRef                        = useRef(null);
   const [clearing, setClearing]           = useState(false);
   const [clearProgress, setClearProgress] = useState({ pct: 0, label: '' });
 
@@ -1383,6 +1390,74 @@ export default function Admin() {
       console.error('Error loading email history:', err);
     } finally {
       setEmailHistoryLoading(false);
+    }
+  }
+
+  async function triggerEmailSend() {
+    setRetrying(true);
+    setSendCard(null);
+    // Tear down any previous listener
+    if (sendUnsubRef.current) { sendUnsubRef.current(); sendUnsubRef.current = null; }
+    try {
+      const latestImport = history[0];
+      if (!latestImport) throw new Error('No import found — upload data first.');
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const queuedAt = new Date();
+      await setDoc(doc(db, 'pendingReports', todayKey), {
+        importId:  latestImport.id,
+        sendAt:    Timestamp.now(),
+        sent:      false,
+        createdAt: serverTimestamp(),
+        error:     deleteField(),
+      }, { merge: true });
+
+      // Seed the card immediately as queued
+      setSendCard({
+        importId:       latestImport.id,
+        importFilename: latestImport.filename || latestImport.id,
+        rowCount:       latestImport.rowCount,
+        queuedAt,
+        status:         'queued',
+        error:          null,
+        sentAt:         null,
+        dateRange:      null,
+        recipients:     null,
+      });
+
+      // Live listener on the pendingReports doc
+      const unsub = onSnapshot(doc(db, 'pendingReports', todayKey), async snap => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        if (d.sent) {
+          // Fetch the emailHistory entry for this import
+          const hSnap = await getDocs(
+            query(collection(db, 'emailHistory'),
+              where('importId', '==', latestImport.id),
+              orderBy('sentAt', 'desc'),
+              limit(1))
+          );
+          const h = hSnap.docs[0]?.data() || null;
+          setSendCard(prev => ({
+            ...prev,
+            status:    'sent',
+            sentAt:    d.sentAt?.toDate?.() || new Date(),
+            dateRange: h?.dateRange   || null,
+            recipients: h?.recipients || null,
+            rowCount:  h?.rowCount    ?? prev.rowCount,
+          }));
+          loadEmailHistory();
+          unsub();
+          sendUnsubRef.current = null;
+        } else if (d.error) {
+          setSendCard(prev => ({ ...prev, status: 'failed', error: d.error }));
+        }
+      });
+      sendUnsubRef.current = unsub;
+    } catch (err) {
+      console.error('Trigger send failed:', err);
+      setSendCard({ status: 'failed', error: err.message, queuedAt: new Date() });
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -2006,12 +2081,134 @@ export default function Admin() {
           />
         )}
 
-        {activeTab === 'emails' && (
+        {activeTab === 'emails' && (() => {
+          const todayKey = new Date().toISOString().slice(0, 10);
+          const hasSentToday = emailHistory.some(e => {
+            const ts = e.sentAt?.toDate ? e.sentAt.toDate() : new Date(e.sentAt);
+            return ts.toISOString().slice(0, 10) === todayKey;
+          });
+          return (
           <div className="section-card">
             <div className="section-card-header">
-              <div className="section-card-title">Email History</div>
-              <div className="section-card-sub">Automated performance reports sent to recipients</div>
+              <div>
+                <div className="section-card-title">Email History</div>
+                <div className="section-card-sub">Automated performance reports sent to recipients</div>
+              </div>
+              <button
+                className="btn-primary"
+                onClick={() => triggerEmailSend()}
+                disabled={hasSentToday || retrying}
+                title={hasSentToday ? 'Emails already sent today' : 'Trigger email send now'}
+                style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                {retrying ? 'Queuing…' : 'Send Reports Now'}
+              </button>
             </div>
+
+            {sendCard && (() => {
+              const statusColor = sendCard.status === 'sent' ? '#22c55e' : sendCard.status === 'failed' ? '#ef4444' : '#f59e0b';
+              const statusBg    = sendCard.status === 'sent' ? 'rgba(34,197,94,0.08)' : sendCard.status === 'failed' ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)';
+              const statusBorder= sendCard.status === 'sent' ? 'rgba(34,197,94,0.3)' : sendCard.status === 'failed' ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.3)';
+              const statusLabel = sendCard.status === 'sent' ? 'Sent' : sendCard.status === 'failed' ? 'Failed' : 'Queued';
+              const allRecipients = sendCard.recipients
+                ? [
+                    ...(sendCard.recipients.sales      || []).map(e => ({ team: 'Sales',      email: e })),
+                    ...(sendCard.recipients.logistics  || []).map(e => ({ team: 'Logistics',  email: e })),
+                    ...(sendCard.recipients.activation || []).map(e => ({ team: 'Activation', email: e })),
+                    ...(sendCard.recipients.management || []).map(e => ({ team: 'Management', email: e })),
+                  ]
+                : [];
+              return (
+                <div style={{
+                  margin: '0 0 20px 0',
+                  borderRadius: '10px',
+                  border: `1px solid ${statusBorder}`,
+                  background: statusBg,
+                  overflow: 'hidden',
+                }}>
+                  {/* Header row */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderBottom: `1px solid ${statusBorder}` }}>
+                    <span style={{
+                      padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700,
+                      background: statusColor, color: '#fff', letterSpacing: '0.04em',
+                    }}>{statusLabel}</span>
+                    {sendCard.importFilename && (
+                      <span style={{ fontSize: 13, color: 'var(--text-dim)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {sendCard.importFilename}
+                        {sendCard.rowCount ? ` · ${sendCard.rowCount.toLocaleString()} rows` : ''}
+                      </span>
+                    )}
+                    {sendCard.status === 'queued' && (
+                      <span style={{ fontSize: 12, color: '#f59e0b' }}>Waiting for cloud function (up to 5 min)…</span>
+                    )}
+                  </div>
+
+                  {/* Detail rows */}
+                  <div style={{ padding: '12px 18px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px 24px' }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Queued At</div>
+                      <div style={{ fontSize: 13 }}>{sendCard.queuedAt?.toLocaleString('en-GB') || '—'}</div>
+                    </div>
+                    {sendCard.sentAt && (
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Sent At</div>
+                        <div style={{ fontSize: 13 }}>{sendCard.sentAt.toLocaleString('en-GB')}</div>
+                      </div>
+                    )}
+                    {sendCard.dateRange && (
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Data Period</div>
+                        <div style={{ fontSize: 13 }}>{sendCard.dateRange}</div>
+                      </div>
+                    )}
+                    <div>
+                      <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Import ID</div>
+                      <div style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-dim)' }}>{sendCard.importId || '—'}</div>
+                    </div>
+                  </div>
+
+                  {/* Error */}
+                  {sendCard.status === 'failed' && sendCard.error && (
+                    <div style={{ margin: '0 18px 14px', padding: '10px 14px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', fontSize: 13, color: '#ef4444' }}>
+                      {sendCard.error}
+                    </div>
+                  )}
+
+                  {/* Recipients */}
+                  {allRecipients.length > 0 && (
+                    <div style={{ padding: '0 18px 14px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Recipients</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {allRecipients.map((r, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                            <span style={{
+                              padding: '1px 7px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                              background: r.team === 'Sales' ? 'rgba(59,130,246,0.15)' :
+                                          r.team === 'Logistics' ? 'rgba(168,85,247,0.15)' :
+                                          r.team === 'Activation' ? 'rgba(245,158,11,0.15)' :
+                                          'rgba(100,116,139,0.15)',
+                              color: r.team === 'Sales' ? '#3b82f6' :
+                                     r.team === 'Logistics' ? '#a855f7' :
+                                     r.team === 'Activation' ? '#f59e0b' :
+                                     'var(--text-dim)',
+                            }}>{r.team}</span>
+                            <span style={{ color: 'var(--text-dim)' }}>{r.email}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Queued — no recipients yet */}
+                  {sendCard.status === 'queued' && (
+                    <div style={{ padding: '0 18px 14px', fontSize: 13, color: 'var(--text-dim)' }}>
+                      Recipients will appear once the cloud function runs.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {emailHistoryLoading ? (
               <div className="section-empty">Loading...</div>
             ) : emailHistory.length === 0 ? (
@@ -2063,7 +2260,8 @@ export default function Admin() {
               </table>
             )}
           </div>
-        )}
+          );
+        })()}
       </div>
     </>
   );

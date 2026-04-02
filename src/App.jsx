@@ -114,6 +114,19 @@ export default function App() {
           />
           <Route path="*" element={<AuthRedirect />} />
         </Routes>
+        <div style={{
+          position: 'fixed',
+          bottom: '8px',
+          right: '12px',
+          fontSize: '11px',
+          color: 'rgba(255,255,255,0.25)',
+          fontFamily: 'monospace',
+          pointerEvents: 'none',
+          zIndex: 9999,
+          userSelect: 'none',
+        }}>
+          {__BUILD_DATE__} · {__COMMIT__}
+        </div>
       </BrowserRouter>
     </AuthContext.Provider>
   );
