@@ -1395,67 +1395,59 @@ export default function Admin() {
 
   async function triggerEmailSend() {
     setRetrying(true);
-    setSendCard(null);
-    // Tear down any previous listener
     if (sendUnsubRef.current) { sendUnsubRef.current(); sendUnsubRef.current = null; }
+    const latestImport = history[0];
+    if (!latestImport) {
+      setSendCard({ status: 'failed', error: 'No import found — upload data first.', queuedAt: new Date() });
+      setRetrying(false);
+      return;
+    }
+    const startedAt = new Date();
+    setSendCard({
+      importId:       latestImport.id,
+      importFilename: latestImport.filename || latestImport.id,
+      rowCount:       latestImport.rowCount,
+      queuedAt:       startedAt,
+      status:         'sending',
+      error:          null,
+      sentAt:         null,
+      dateRange:      null,
+      recipients:     null,
+    });
     try {
-      const latestImport = history[0];
-      if (!latestImport) throw new Error('No import found — upload data first.');
-      const todayKey = new Date().toISOString().slice(0, 10);
-      const queuedAt = new Date();
-      await setDoc(doc(db, 'pendingReports', todayKey), {
-        importId:  latestImport.id,
-        sendAt:    Timestamp.now(),
-        sent:      false,
-        createdAt: serverTimestamp(),
-        error:     deleteField(),
-      }, { merge: true });
-
-      // Seed the card immediately as queued
-      setSendCard({
-        importId:       latestImport.id,
-        importFilename: latestImport.filename || latestImport.id,
-        rowCount:       latestImport.rowCount,
-        queuedAt,
-        status:         'queued',
-        error:          null,
-        sentAt:         null,
-        dateRange:      null,
-        recipients:     null,
-      });
-
-      // Live listener on the pendingReports doc
-      const unsub = onSnapshot(doc(db, 'pendingReports', todayKey), async snap => {
-        if (!snap.exists()) return;
-        const d = snap.data();
-        if (d.sent) {
-          // Fetch the emailHistory entry for this import
-          const hSnap = await getDocs(
-            query(collection(db, 'emailHistory'),
-              where('importId', '==', latestImport.id),
-              orderBy('sentAt', 'desc'),
-              limit(1))
-          );
-          const h = hSnap.docs[0]?.data() || null;
-          setSendCard(prev => ({
-            ...prev,
-            status:    'sent',
-            sentAt:    d.sentAt?.toDate?.() || new Date(),
-            dateRange: h?.dateRange   || null,
-            recipients: h?.recipients || null,
-            rowCount:  h?.rowCount    ?? prev.rowCount,
-          }));
-          loadEmailHistory();
-          unsub();
-          sendUnsubRef.current = null;
-        } else if (d.error) {
-          setSendCard(prev => ({ ...prev, status: 'failed', error: d.error }));
+      const token = await auth.currentUser.getIdToken();
+      const resp  = await fetch(
+        'https://us-central1-performer-2df35.cloudfunctions.net/sendReportsNow',
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body:    JSON.stringify({ importId: latestImport.id }),
         }
-      });
-      sendUnsubRef.current = unsub;
+      );
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `Server error ${resp.status}`);
+      }
+      // Fetch the emailHistory entry that was just written
+      const hSnap = await getDocs(
+        query(collection(db, 'emailHistory'),
+          where('importId', '==', latestImport.id),
+          orderBy('sentAt', 'desc'),
+          limit(1))
+      );
+      const h = hSnap.docs[0]?.data() || null;
+      setSendCard(prev => ({
+        ...prev,
+        status:     'sent',
+        sentAt:     new Date(),
+        dateRange:  h?.dateRange    || null,
+        recipients: h?.recipients   || null,
+        rowCount:   h?.rowCount     ?? prev.rowCount,
+      }));
+      await loadEmailHistory();
     } catch (err) {
-      console.error('Trigger send failed:', err);
-      setSendCard({ status: 'failed', error: err.message, queuedAt: new Date() });
+      console.error('Send failed:', err);
+      setSendCard(prev => ({ ...prev, status: 'failed', error: err.message }));
     } finally {
       setRetrying(false);
     }
@@ -2101,7 +2093,7 @@ export default function Admin() {
                 title={hasSentToday ? 'Emails already sent today' : 'Trigger email send now'}
                 style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
               >
-                {retrying ? 'Queuing…' : 'Send Reports Now'}
+                {retrying ? 'Sending…' : 'Send Reports Now'}
               </button>
             </div>
 
@@ -2109,7 +2101,7 @@ export default function Admin() {
               const statusColor = sendCard.status === 'sent' ? '#22c55e' : sendCard.status === 'failed' ? '#ef4444' : '#f59e0b';
               const statusBg    = sendCard.status === 'sent' ? 'rgba(34,197,94,0.08)' : sendCard.status === 'failed' ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)';
               const statusBorder= sendCard.status === 'sent' ? 'rgba(34,197,94,0.3)' : sendCard.status === 'failed' ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.3)';
-              const statusLabel = sendCard.status === 'sent' ? 'Sent' : sendCard.status === 'failed' ? 'Failed' : 'Queued';
+              const statusLabel = sendCard.status === 'sent' ? 'Sent' : sendCard.status === 'failed' ? 'Failed' : 'Sending…';
               const allRecipients = sendCard.recipients
                 ? [
                     ...(sendCard.recipients.sales      || []).map(e => ({ team: 'Sales',      email: e })),
@@ -2138,15 +2130,15 @@ export default function Admin() {
                         {sendCard.rowCount ? ` · ${sendCard.rowCount.toLocaleString()} rows` : ''}
                       </span>
                     )}
-                    {sendCard.status === 'queued' && (
-                      <span style={{ fontSize: 12, color: '#f59e0b' }}>Waiting for cloud function (up to 5 min)…</span>
+                    {sendCard.status === 'sending' && (
+                      <span style={{ fontSize: 12, color: '#f59e0b' }}>Generating PDFs and sending emails…</span>
                     )}
                   </div>
 
                   {/* Detail rows */}
                   <div style={{ padding: '12px 18px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px 24px' }}>
                     <div>
-                      <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Queued At</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Started At</div>
                       <div style={{ fontSize: 13 }}>{sendCard.queuedAt?.toLocaleString('en-GB') || '—'}</div>
                     </div>
                     {sendCard.sentAt && (
@@ -2199,10 +2191,10 @@ export default function Admin() {
                     </div>
                   )}
 
-                  {/* Queued — no recipients yet */}
-                  {sendCard.status === 'queued' && (
+                  {/* Sending — no recipients yet */}
+                  {sendCard.status === 'sending' && (
                     <div style={{ padding: '0 18px 14px', fontSize: 13, color: 'var(--text-dim)' }}>
-                      Recipients will appear once the cloud function runs.
+                      Recipients will appear once emails are delivered.
                     </div>
                   )}
                 </div>

@@ -2,6 +2,7 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 import PDFDocument from 'pdfkit';
 import nodemailer from 'nodemailer';
 
@@ -922,6 +923,52 @@ export const autoImportCsv = onRequest(
       res.status(200).json({ success: true, result });
     } catch (err) {
       console.error('Auto-import error:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+// ─── HTTP: SEND REPORTS NOW ───────────────────────────────────────────────────
+export const sendReportsNow = onRequest(
+  { cors: true, invoker: 'public', memory: '1GiB', timeoutSeconds: 540, region: 'us-central1' },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed' });
+      return;
+    }
+    // Verify Firebase Auth ID token
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    try {
+      await getAuth().verifyIdToken(token);
+    } catch {
+      res.status(401).json({ error: 'Invalid token' });
+      return;
+    }
+    try {
+      const importId = req.body?.importId || null;
+      await sendAllReports(importId);
+      const todayKey   = new Date().toISOString().slice(0, 10);
+      const pendingRef = db.collection('pendingReports').doc(todayKey);
+      const existing   = await pendingRef.get();
+      if (existing.exists) {
+        await pendingRef.update({ sent: true, sentAt: FieldValue.serverTimestamp() });
+      }
+      res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('sendReportsNow error:', err);
       res.status(500).json({ success: false, error: err.message });
     }
   }
