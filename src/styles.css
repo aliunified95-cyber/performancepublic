@@ -2813,7 +2813,8 @@ td {
 
 /* ─── PRINT-ONLY ELEMENTS (hidden in normal view) ───────────────────────────── */
 .print-generated,
-.print-footer { display: none; }
+.print-footer,
+.print-period-line { display: none; }
 
 /* ─── PDF BUTTON ─────────────────────────────────────────────────────────────── */
 .pdf-btn {
@@ -2902,7 +2903,7 @@ td {
   /* ── PRINT HEADER ── */
   .page-header {
     display: flex !important;
-    align-items: flex-end !important;
+    align-items: center !important;
     justify-content: space-between !important;
     padding: 0 0 10px 0 !important;
     margin-bottom: 14px !important;
@@ -2911,33 +2912,18 @@ td {
     page-break-after: avoid !important;
   }
 
-  .page-header h1 {
-    font-size: 22px !important;
+  /* Hide screen-only header text */
+  .page-header h1,
+  .page-header p { display: none !important; }
+
+  /* Period line — replaces h1 in print */
+  .print-period-line {
+    display: block !important;
+    font-size: 16px !important;
     font-weight: 700 !important;
     color: #111827 !important;
-    margin: 0 0 4px 0 !important;
-    letter-spacing: -0.5px !important;
+    letter-spacing: -0.3px !important;
     line-height: 1.2 !important;
-  }
-
-  /* Green accent dot before title */
-  .page-header h1::before {
-    content: '';
-    display: inline-block !important;
-    width: 10px !important;
-    height: 10px !important;
-    background: #059669 !important;
-    border-radius: 50% !important;
-    margin-right: 10px !important;
-    vertical-align: middle !important;
-    margin-bottom: 2px !important;
-  }
-
-  .page-header p {
-    font-size: 11px !important;
-    color: #6b7280 !important;
-    margin: 0 !important;
-    font-weight: 400 !important;
   }
 
   /* Generated-at block (right side of header) */
@@ -2958,56 +2944,74 @@ td {
 
   /* ── HERO BADGE / KPI SECTION ── */
   .hero-badge {
-    background: #f9fafb !important;
-    border: 1px solid #e5e7eb !important;
-    border-left: 4px solid #059669 !important;
-    border-radius: 8px !important;
-    padding: 10px 16px !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
     margin-bottom: 14px !important;
     color: #111827 !important;
     page-break-inside: avoid !important;
-    page-break-after: avoid !important;
   }
 
+  .hero-badge::before,
+  .hero-badge::after { display: none !important; }
+
+  /* Section header (shared: "Team Performance Overview" / "Team Overview") */
   .hero-badge-label {
-    font-size: 9px !important;
+    font-size: 13px !important;
     font-weight: 700 !important;
-    letter-spacing: 1.5px !important;
-    text-transform: uppercase !important;
-    color: #059669 !important;
-    margin-bottom: 2px !important;
+    letter-spacing: 0 !important;
+    text-transform: none !important;
+    color: #111827 !important;
+    margin-bottom: 8px !important;
+    padding-bottom: 4px !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
   }
 
-  .hero-badge-title {
-    font-size: 11px !important;
-    color: #374151 !important;
-    margin-bottom: 10px !important;
-  }
+  /* Hide subtitle — period / source info not needed in print */
+  .hero-badge-title { display: none !important; }
 
   .dot { background: #059669 !important; }
 
-  .hero-kpi-value { color: #111827 !important; font-size: 20px !important; font-weight: 700 !important; }
-  .hero-kpi-label { color: #6b7280 !important; font-size: 9px !important; }
-  .hero-kpi-badge { background: #f3f4f6 !important; color: #374151 !important; font-size: 9px !important; }
+  /* KPI grid — 5 cards in one row */
+  .hero-kpis {
+    display: grid !important;
+    grid-template-columns: repeat(5, 1fr) !important;
+    gap: 8px !important;
+  }
+
+  .hero-kpi {
+    background: #f9fafb !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    padding: 10px !important;
+    border-right: none !important;
+  }
+
+  .hero-kpi-icon { width: 22px !important; height: 22px !important; border-radius: 6px !important; margin-bottom: 6px !important; }
+  .hero-kpi-icon svg { width: 11px !important; height: 11px !important; }
+
+  .hero-kpi-value { color: #111827 !important; font-size: 18px !important; font-weight: 700 !important; }
+  .hero-kpi-value sup { font-size: 10px !important; font-weight: 600 !important; }
+  .hero-kpi-label { color: #6b7280 !important; font-size: 9px !important; margin-bottom: 4px !important; }
+  .hero-kpi-badge { background: #f3f4f6 !important; color: #374151 !important; font-size: 8px !important; padding: 1px 5px !important; border-radius: 20px !important; }
 
   /* ── JOURNEY STAGES (Dashboard page) ── */
   .dashboard-hero {
     display: flex !important;
-    flex-wrap: wrap !important;
-    gap: 10px !important;
-    padding: 12px 16px !important;
+    flex-direction: column !important;
+    gap: 14px !important;
+    padding: 0 !important;
     align-items: stretch !important;
-  }
-
-  .dashboard-hero .hero-badge-label,
-  .dashboard-hero .hero-badge-title {
-    width: 100% !important;
-    margin-bottom: 4px !important;
   }
 
   .journey-stages {
     display: flex !important;
-    flex: 3 !important;
+    flex: none !important;
+    width: 100% !important;
     gap: 8px !important;
   }
 
@@ -3036,9 +3040,28 @@ td {
   .stage-icon-wrap { width: 30px !important; height: 30px !important; border-radius: 6px !important; margin-bottom: 8px !important; }
   .stage-icon svg  { width: 16px !important; height: 16px !important; }
 
-  .dash-handling-section { flex: 4 !important; margin-top: 0 !important; padding-top: 0 !important; border-top: none !important; }
-  .dash-handling-header  { display: none !important; }
-  .dash-handling-row     { display: flex !important; gap: 8px !important; height: 100% !important; }
+  .dash-handling-section {
+    flex: none !important;
+    width: 100% !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    border-top: none !important;
+  }
+
+  /* "Handling Times:" section header */
+  .dash-handling-header {
+    display: block !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    color: #111827 !important;
+    letter-spacing: 0 !important;
+    text-transform: none !important;
+    margin-bottom: 8px !important;
+    padding-bottom: 4px !important;
+    border-bottom: 1px solid #e5e7eb !important;
+  }
+
+  .dash-handling-row { display: flex !important; gap: 8px !important; }
 
   .dash-handling-card {
     flex: 1 !important;
@@ -3058,10 +3081,15 @@ td {
   .total-journey-avg,
   .total-journey-note     { color: #111827 !important; }
 
-  /* ── SECTION HEADER ── */
-  .section-header { margin-bottom: 8px !important; page-break-after: avoid !important; }
-  .section-title  { font-size: 13px !important; font-weight: 600 !important; color: #111827 !important; }
-  .section-sub    { font-size: 10px !important; color: #6b7280 !important; }
+  /* ── SECTION HEADER (Agent Breakdown etc.) ── */
+  .section-header {
+    margin-bottom: 8px !important;
+    padding-bottom: 4px !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    page-break-after: avoid !important;
+  }
+  .section-title  { font-size: 13px !important; font-weight: 700 !important; color: #111827 !important; }
+  .section-sub    { font-size: 9px !important; color: #6b7280 !important; }
 
   /* ── TABLE ── */
   .table-wrap {

@@ -839,19 +839,6 @@ async function runImport(csvText, filename) {
     }
   }
 
-  return {
-    importId,
-    agents: agents.length,
-    summary,
-    filename: filename || 'unknown.csv',
-    rowCount: totalRows,
-    uniqueOrderCount: uniqueCount,
-    salesCount,
-    logisticsCount,
-    activationCount,
-    isLargeFile,
-  };
-
   // Schedule PDF reports to be sent 5 minutes after import (once per day)
   const dateKey    = new Date().toISOString().slice(0, 10); // e.g. '2026-04-01'
   const sendAt     = new Date(Date.now() + 5 * 60 * 1000);

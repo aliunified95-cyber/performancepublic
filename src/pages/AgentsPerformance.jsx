@@ -595,6 +595,9 @@ export default function AgentsPerformance() {
             <div className="page-header">
               <div>
                 <h1>Sales Agents Performance</h1>
+                <span className="print-period-line">
+                  Generated on: {new Date().toLocaleString('en-GB')}
+                </span>
                 <p>
                   Showing data for: <strong>{label}</strong>
                   {loadState === 'demo' && (
@@ -608,7 +611,6 @@ export default function AgentsPerformance() {
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
                 <span className="print-generated">
                   <strong>Sales Agents Performance</strong>
-                  Generated: {new Date().toLocaleString('en-GB')}
                 </span>
                 <button className="pdf-btn" onClick={() => window.print()}>
                   <svg viewBox="0 0 24 24" aria-hidden="true">

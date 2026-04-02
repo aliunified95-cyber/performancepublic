@@ -404,6 +404,11 @@ export default function Dashboard() {
             <div className="page-header">
               <div>
                 <h1>Team Performance Dashboard</h1>
+                <span className="print-period-line">
+                  {currentRange === 'custom' && customDates.from && customDates.to
+                    ? `The period from ${customDates.from} to ${customDates.to}:`
+                    : `The period: ${label}`}
+                </span>
                 <p>
                   Showing data for: <strong>{label}</strong>
                   {loadState === 'demo' && (
