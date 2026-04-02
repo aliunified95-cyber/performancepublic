@@ -10,7 +10,9 @@
       "Bash(firebase functions:list --project performer-2df35)",
       "Bash(firebase functions:list --project performer-2df35 --json)",
       "Bash(python -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(f['uri']\\) for f in data if 'uri' in f]\")",
-      "Bash(firebase deploy:*)"
+      "Bash(firebase deploy:*)",
+      "Bash(npx firebase-tools@latest iam:serviceaccounts:list --project performer-2df35)",
+      "Bash(firebase functions:secrets:set GMAIL_APP_PASSWORD)"
     ]
   }
 }
