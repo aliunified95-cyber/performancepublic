@@ -688,6 +688,7 @@ function SuccessSection({ result, onNewImport }) {
 function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRetry, newAgentCode, newDisplayName, newAgentType, newAgentError, onNewAgentCode, onNewDisplayName, onNewAgentType, onAdd, onUpdate, onBulkUpdate }) {
   const [search, setSearch]         = useState('');
   const [localNames, setLocalNames] = useState({});
+  const [localEmails, setLocalEmails] = useState({});
   const [savedRows, setSavedRows]   = useState({});
   const [filterType, setFilterType] = useState('all');
 
@@ -705,17 +706,23 @@ function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRe
         displayName: mapping.displayName || '',
         visible:     mapping.visible !== false,
         agentType:   mapping.agentType || 'sales',
+        email:       mapping.email || '',
         source:      inReport ? 'report' : 'saved',
       };
     });
     return Object.values(map).sort((a, b) => a.agentCode.localeCompare(b.agentCode));
   }, [mappings, parsedAgents]);
 
-  // Seed localNames for new agents without overwriting in-progress edits
+  // Seed localNames/localEmails for new agents without overwriting in-progress edits
   useEffect(() => {
     setLocalNames(prev => {
       const next = { ...prev };
       combined.forEach(m => { if (!(m.agentCode in next)) next[m.agentCode] = m.displayName; });
+      return next;
+    });
+    setLocalEmails(prev => {
+      const next = { ...prev };
+      combined.forEach(m => { if (!(m.agentCode in next)) next[m.agentCode] = m.email || ''; });
       return next;
     });
   }, [combined]);
@@ -748,6 +755,14 @@ function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRe
     const newVal = (localNames[mapping.agentCode] ?? mapping.displayName).trim();
     if (newVal !== mapping.displayName) {
       onUpdate(mapping, 'displayName', newVal);
+      flashSaved(mapping.agentCode);
+    }
+  }
+
+  function handleEmailBlur(mapping) {
+    const newVal = (localEmails[mapping.agentCode] ?? mapping.email ?? '').trim();
+    if (newVal !== (mapping.email || '')) {
+      onUpdate(mapping, 'email', newVal);
       flashSaved(mapping.agentCode);
     }
   }
@@ -925,6 +940,7 @@ function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRe
               <tr>
                 <th>Agent code</th>
                 <th>Display name</th>
+                <th>Email</th>
                 <th>Type</th>
                 <th>Source</th>
                 <th>Show on dashboard</th>
@@ -933,7 +949,7 @@ function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRe
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-dim)' }}>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-dim)' }}>
                     {search ? 'No agents match your search.' : 'No agent codes found. Import a CSV to auto-populate agents.'}
                   </td>
                 </tr>
@@ -948,6 +964,16 @@ function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRe
                       placeholder="Enter display name…"
                       onChange={(e) => setLocalNames(prev => ({ ...prev, [mapping.agentCode]: e.target.value }))}
                       onBlur={() => handleNameBlur(mapping)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="mapping-name-input"
+                      type="email"
+                      value={localEmails[mapping.agentCode] ?? mapping.email ?? ''}
+                      placeholder="agent@email.com"
+                      onChange={(e) => setLocalEmails(prev => ({ ...prev, [mapping.agentCode]: e.target.value }))}
+                      onBlur={() => handleEmailBlur(mapping)}
                     />
                   </td>
                   <td>
@@ -1474,10 +1500,10 @@ export default function Admin() {
     }
   }
 
-  async function saveMapping(agentCode, displayName, visible, agentType = 'sales') {
+  async function saveMapping(agentCode, displayName, visible, agentType = 'sales', email = '') {
     const code = (agentCode || '').trim().toUpperCase();
     if (!code) return;
-    const data = { agentCode: code, displayName: (displayName || '').trim(), visible: visible !== false, agentType };
+    const data = { agentCode: code, displayName: (displayName || '').trim(), visible: visible !== false, agentType, email: (email || '').trim() };
     await setDoc(doc(db, 'agentMappings', code), data);
     // Optimistic update — avoids a full collection re-read after every single save
     setAgentMappings(prev => {
@@ -1498,7 +1524,7 @@ export default function Admin() {
         displayName: (displayName || '').trim(),
         visible:     visible !== false,
         agentType:   agentType || 'sales',
-      });
+      }, { merge: true });
     });
     await batch.commit();
     await loadMappings(); // Single re-fetch after the entire batch
@@ -1606,11 +1632,8 @@ export default function Admin() {
   }
 
   async function handleUpdateMapping(mapping, field, value) {
-    const updated = {
-      ...mapping,
-      [field]: field === 'visible' ? value : value,
-    };
-    await saveMapping(updated.agentCode, updated.displayName, updated.visible, updated.agentType || 'sales');
+    const updated = { ...mapping, [field]: value };
+    await saveMapping(updated.agentCode, updated.displayName, updated.visible, updated.agentType || 'sales', updated.email || '');
   }
 
   function handleFile(f) {

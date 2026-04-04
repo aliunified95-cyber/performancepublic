@@ -113,7 +113,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
         All Agents · {label} · {src}
       </div>
 
-      <div className="hero-kpis" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
+      <div className="hero-kpis hero-kpis--3col" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
         {/* Total Assigned */}
         <div className="hero-kpi">
           <div className="hero-kpi-icon" style={{ background: 'rgba(46,204,138,0.18)' }}>
@@ -163,11 +163,11 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
               <polyline points="12 6 12 12 16 14"/>
             </svg>
           </div>
-          <div className="hero-kpi-value" style={{ color: isSLAExceeded ? '#E74C3C' : 'inherit' }}>
+          <div className={`hero-kpi-value${isSLAExceeded ? ' sla-exceeded' : ''}`} style={{ color: isSLAExceeded ? '#E74C3C' : 'inherit' }}>
             {ch}<sup>h {String(cm).padStart(2, '0')}m</sup>
           </div>
           <div className="hero-kpi-label">Avg Claim Time</div>
-          <span className="hero-kpi-badge badge-neu" style={{ color: isSLAExceeded ? '#E74C3C' : 'inherit', background: isSLAExceeded ? 'rgba(231,76,60,0.12)' : '' }}>
+          <span className={`hero-kpi-badge badge-neu${isSLAExceeded ? ' sla-exceeded' : ''}`} style={{ color: isSLAExceeded ? '#E74C3C' : 'inherit', background: isSLAExceeded ? 'rgba(231,76,60,0.12)' : '' }}>
             {isSLAExceeded ? 'SLA Exceeded' : 'assign→claim'}
           </span>
         </div>
@@ -196,7 +196,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
               <line x1="12" y1="17" x2="12.01" y2="17"/>
             </svg>
           </div>
-          <div className="hero-kpi-value" style={{ color: totalBadHandling > 0 ? '#E74C3C' : 'inherit' }}>
+          <div className={`hero-kpi-value${totalBadHandling > 0 ? ' sla-exceeded' : ''}`} style={{ color: totalBadHandling > 0 ? '#E74C3C' : 'inherit' }}>
             {totalBadHandling.toLocaleString()}
           </div>
           <div className="hero-kpi-label">Bad Handling</div>
@@ -341,7 +341,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                       <span className="mini-bar-pct">{completionRate}%</span>
                     </div>
                   </td>
-                  <td className="num-cell" style={{ 
+                  <td className={`num-cell${agent.claimTimeSec > slaSeconds ? ' sla-exceeded' : ''}`} style={{
                     color: agent.claimTimeSec > slaSeconds ? '#E74C3C' : 'inherit',
                     fontWeight: agent.claimTimeSec > slaSeconds ? 600 : 'inherit'
                   }}>
@@ -353,7 +353,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                   <td className="num-cell">{fmtTime(agent.handleTimeSec)}</td>
                   <td className="num-cell">
                     {(agent.badHandlingCount || 0) > 0 ? (
-                      <span style={{ color: '#E74C3C', fontWeight: 600 }}>
+                      <span className="sla-exceeded" style={{ color: '#E74C3C', fontWeight: 600 }}>
                         {agent.badHandlingCount}
                       </span>
                     ) : (

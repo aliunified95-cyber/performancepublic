@@ -2976,11 +2976,16 @@ td {
 
   .dot { background: #059669 !important; }
 
-  /* KPI grid — 5 cards in one row */
+  /* KPI grid — 5 cards in one row (default) */
   .hero-kpis {
     display: grid !important;
     grid-template-columns: repeat(5, 1fr) !important;
     gap: 8px !important;
+  }
+
+  /* Activation: 6 badges → 3 per row */
+  .hero-kpis--3col {
+    grid-template-columns: repeat(3, 1fr) !important;
   }
 
   .hero-kpi {
@@ -3148,6 +3153,9 @@ td {
   .trend-up   { color: #059669 !important; }
   .trend-down { color: #dc2626 !important; }
   .trend-neu  { color: #6b7280 !important; }
+
+  /* SLA exceeded — red preserved in print */
+  .sla-exceeded { color: #E74C3C !important; }
 
   .sla-bar-wrap { display: none !important; }
 
