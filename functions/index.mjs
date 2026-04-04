@@ -332,6 +332,35 @@ function safeAvg(arr) {
   return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null;
 }
 
+// ─── SHARED STATS BUILDER ─────────────────────────────────────────────────────
+// Used by both sendAllReports (auto email) and downloadPDF (Save as PDF).
+function statsFromDocs(docs, timeField) {
+  const map = {};
+  docs.forEach(d => {
+    const data = d.data();
+    const agent = data.agentName || '';
+    if (!agent) return;
+    if (!map[agent]) map[agent] = { orders: 0, claimed: 0, times: [], badCount: 0 };
+    map[agent].orders++;
+    if (data.claimed) {
+      map[agent].claimed++;
+      const t = data[timeField];
+      if (t != null && t >= 0) {
+        if (t >= BAD_HANDLING_SEC) map[agent].badCount++;
+        else map[agent].times.push(t);
+      }
+    }
+  });
+  return Object.entries(map).map(([name, d]) => ({
+    name,
+    orders:      d.orders,
+    claimed:     d.claimed,
+    rate:        d.orders ? Math.round(d.claimed / d.orders * 100) : 0,
+    avgTime:     safeAvg(d.times),
+    badHandling: d.badCount,
+  })).sort((a, b) => b.orders - a.orders);
+}
+
 function buildSalesStats(rows) {
   const map = {};
   rows.forEach(row => {
@@ -406,9 +435,100 @@ function buildActivationStats(rows) {
   })).sort((a, b) => b.orders - a.orders);
 }
 
-// ─── PDF BUILDER ─────────────────────────────────────────────────────────────
-// Uses the exact same CSS classes and structure as the browser @media print view
-// so the emailed PDF looks identical to "Save as PDF" from the dashboard.
+// ─── PDF FROM LIVE APP ───────────────────────────────────────────────────────
+// Puppeteer navigates to the actual deployed app and generates the PDF the same
+// way the browser does when the user clicks "Save as PDF" (window.print()).
+// This guarantees the emailed PDF is pixel-identical to the in-app print view.
+const FIREBASE_WEB_API_KEY = 'AIzaSyBC9TKA8shfMD64qfQPJJ3DvdC7hbkxamc';
+const APP_BASE_URL         = 'https://performer-2df35.web.app';
+
+// Exchange a Firebase Admin custom token for a browser-usable auth state object
+// so Puppeteer can inject it into localStorage and access protected pages.
+async function getAuthStateForPuppeteer() {
+  const customToken = await getAuth().createCustomToken('pdf-render-service');
+  const resp = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${FIREBASE_WEB_API_KEY}`,
+    {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ token: customToken, returnSecureToken: true }),
+    }
+  );
+  if (!resp.ok) throw new Error(`Firebase token exchange failed: ${await resp.text()}`);
+  const { idToken, refreshToken, localId, expiresIn } = await resp.json();
+  return {
+    uid: localId, email: null, emailVerified: false, displayName: null,
+    isAnonymous: false, photoURL: null, phoneNumber: null, tenantId: null,
+    providerData: [],
+    stsTokenManager: {
+      refreshToken,
+      accessToken: idToken,
+      expirationTime: Date.now() + parseInt(expiresIn, 10) * 1000,
+    },
+    createdAt:   String(Date.now()),
+    lastLoginAt: String(Date.now()),
+    apiKey:  FIREBASE_WEB_API_KEY,
+    appName: '[DEFAULT]',
+  };
+}
+
+// Navigate a Puppeteer page to a path, wait for the data to load, print as PDF.
+async function renderAndPrint(page, path, waitSelector) {
+  await page.goto(`${APP_BASE_URL}${path}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  // Wait for the loading spinner to disappear (data has loaded from Firestore)
+  await page.waitForFunction(() => !document.querySelector('.spinner-lg'), { timeout: 30000 });
+  if (waitSelector) {
+    await page.waitForSelector(waitSelector, { timeout: 15000 }).catch(() => {});
+  }
+  await new Promise(r => setTimeout(r, 1200)); // stabilisation
+  const buf = await page.pdf({
+    format:          'A4',
+    landscape:       true,
+    printBackground: true,
+    margin: { top: '8mm', right: '10mm', bottom: '8mm', left: '10mm' },
+  });
+  return Buffer.from(buf);
+}
+
+// Launch one browser, generate all four department PDFs by navigating to the
+// actual live app pages — identical to what "Save as PDF" produces per page.
+async function buildAllDeptPDFs(period) {
+  const authState = await getAuthStateForPuppeteer();
+  const fromStr   = period.from.toISOString().slice(0, 10);
+  const toStr     = period.to.toISOString().slice(0, 10);
+  const authKey   = `firebase:authUser:${FIREBASE_WEB_API_KEY}:[DEFAULT]`;
+
+  const executablePath = await chromium.executablePath(CHROMIUM_PACK);
+  const browser = await puppeteer.launch({
+    args:            chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath,
+    headless:        chromium.headless,
+  });
+  try {
+    const pg = await browser.newPage();
+
+    // Inject Firebase auth + custom date range into localStorage before every
+    // page navigation, so ProtectedRoute passes and the correct period is shown.
+    await pg.evaluateOnNewDocument((key, val, from, to) => {
+      localStorage.setItem(key, val);
+      localStorage.setItem('tpw_filter_range', 'custom');
+      localStorage.setItem('tpw_filter_from', from);
+      localStorage.setItem('tpw_filter_to',   to);
+    }, authKey, JSON.stringify(authState), fromStr, toStr);
+
+    const salesPDF      = await renderAndPrint(pg, '/performance', '.table-wrap');
+    const logisticsPDF  = await renderAndPrint(pg, '/logistics',   '.table-wrap');
+    const activationPDF = await renderAndPrint(pg, '/activation',  '.table-wrap');
+    const managementPDF = await renderAndPrint(pg, '/dashboard',   '.hero-badge');
+
+    return { salesPDF, logisticsPDF, activationPDF, managementPDF };
+  } finally {
+    await browser.close();
+  }
+}
+
+// ─── LEGACY TEMPLATE PDF (used only by downloadPDF endpoint) ─────────────────
 function buildPDFHtml({ title, department, dateRange, kpis, columns, rows: tableRows, slaSeconds }) {
   const generatedAt = new Date().toLocaleString('en-GB');
   const slaSec = slaSeconds || 7200;
@@ -744,33 +864,6 @@ async function sendAllReports(importId) {
   const slaLogisticsSec = ((slaData.logistics  || {}).workingHours || 120) * 60;
   const slaActSec       = ((slaData.activation || {}).workingHours || 120) * 60;
 
-  function statsFromDocs(docs, timeField) {
-    const map = {};
-    docs.forEach(d => {
-      const data = d.data();
-      const agent = data.agentName || '';
-      if (!agent) return;
-      if (!map[agent]) map[agent] = { orders: 0, claimed: 0, times: [], badCount: 0 };
-      map[agent].orders++;
-      if (data.claimed) {
-        map[agent].claimed++;
-        const t = data[timeField];
-        if (t != null && t >= 0) {
-          if (t >= BAD_HANDLING_SEC) map[agent].badCount++;
-          else map[agent].times.push(t);
-        }
-      }
-    });
-    return Object.entries(map).map(([name, d]) => ({
-      name,
-      orders:      d.orders,
-      claimed:     d.claimed,
-      rate:        d.orders ? Math.round(d.claimed / d.orders * 100) : 0,
-      avgTime:     safeAvg(d.times),
-      badHandling: d.badCount,
-    })).sort((a, b) => b.orders - a.orders);
-  }
-
   const salesStats = statsFromDocs(salesSnap.docs,  'claimTimeSec');
   const logStats   = statsFromDocs(logSnap.docs,    'claimTimeSec');
   const actStats   = statsFromDocs(actSnap.docs,    'handleTimeSec');
@@ -802,90 +895,20 @@ async function sendAllReports(importId) {
       </div>
     </div>`;
 
-  // ── Sales PDF
-  const salesClaimRate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
-  const salesPDF = await buildPDF({
-    title: 'Sales Performance Report', department: 'sales', dateRange,
-    slaSeconds: slaSalesSec,
-    kpis: [
-      { label: 'Total Orders',   value: totalOrders.toLocaleString(),   badge: 'total' },
-      { label: 'Claimed',        value: totalClaimed.toLocaleString(),  badge: `${salesClaimRate}% rate` },
-      { label: 'Claim Rate',     value: `${salesClaimRate}%`,           badge: 'of orders' },
-      { label: 'Avg Claim Time', value: fmtTime(salesAvgTime),          badge: salesAvgTime > slaSalesSec ? 'SLA Exceeded' : 'team avg', exceeded: salesAvgTime > slaSalesSec },
-      { label: 'Agents',         value: String(salesStats.length),      badge: 'active' },
-    ],
-    columns: ['Agent', 'Orders', 'Claimed', 'Claim Rate', 'Avg Claim Time', 'Bad Handling'],
-    rows: salesStats,
-  });
-
-  // ── Logistics PDF
-  const logOrders  = logStats.reduce((s, a) => s + a.orders,  0);
-  const logClaimed = logStats.reduce((s, a) => s + a.claimed, 0);
-  const logClaimRate = logOrders ? Math.round(logClaimed / logOrders * 100) : 0;
-  const logisticsPDF = await buildPDF({
-    title: 'Logistics Performance Report', department: 'logistics', dateRange,
-    slaSeconds: slaLogisticsSec,
-    kpis: [
-      { label: 'Total Assigned', value: logOrders.toLocaleString(),    badge: 'total' },
-      { label: 'Claimed',        value: logClaimed.toLocaleString(),   badge: `${logClaimRate}% rate` },
-      { label: 'Claim Rate',     value: `${logClaimRate}%`,            badge: 'of assigned' },
-      { label: 'Avg Claim Time', value: fmtTime(logAvgTime),           badge: logAvgTime > slaLogisticsSec ? 'SLA Exceeded' : 'team avg', exceeded: logAvgTime > slaLogisticsSec },
-      { label: 'Agents',         value: String(logStats.length),       badge: 'active' },
-    ],
-    columns: ['Agent', 'Assigned', 'Claimed', 'Claim Rate', 'Avg Claim Time', 'Bad Handling'],
-    rows: logStats,
-  });
-
-  // ── Activation PDF
-  const actOrders  = actStats.reduce((s, a) => s + a.orders,  0);
-  const actClaimed = actStats.reduce((s, a) => s + a.claimed, 0);
-  const actRate    = actOrders ? Math.round(actClaimed / actOrders * 100) : 0;
-  const activationPDF = await buildPDF({
-    title: 'Activation Performance Report', department: 'activation', dateRange,
-    slaSeconds: slaActSec,
-    kpis: [
-      { label: 'Total Assigned',  value: actOrders.toLocaleString(),   badge: 'total' },
-      { label: 'Completed',       value: actClaimed.toLocaleString(),  badge: `${actRate}% rate` },
-      { label: 'Completion Rate', value: `${actRate}%`,                badge: 'of assigned' },
-      { label: 'Avg Handle Time', value: fmtTime(actAvgTime),          badge: actAvgTime > slaActSec ? 'SLA Exceeded' : 'team avg', exceeded: actAvgTime > slaActSec },
-      { label: 'Agents',          value: String(actStats.length),      badge: 'active' },
-    ],
-    columns: ['Agent', 'Assigned', 'Completed', 'Completion Rate', 'Avg Handle Time', 'Bad Handling'],
-    rows: actStats,
-  });
-
-  // ── Management PDF (top-5 per dept, flat array rows for section headers)
-  const top5 = arr => arr.slice(0, 5);
-  const managementPDF = await buildPDF({
-    title: 'Management Summary Report', department: 'management', dateRange,
-    slaSeconds: Math.min(slaSalesSec, slaLogisticsSec, slaActSec),
-    kpis: [
-      { label: 'Total Orders',     value: totalOrders.toLocaleString(),   badge: 'total' },
-      { label: 'Sales Claim Rate', value: `${salesClaimRate}%`,           badge: 'sales' },
-      { label: 'Avg Sales Claim',  value: fmtTime(salesAvgTime),          badge: salesAvgTime > slaSalesSec     ? 'SLA Exceeded' : 'team avg', exceeded: salesAvgTime > slaSalesSec },
-      { label: 'Avg Log Claim',    value: fmtTime(logAvgTime),            badge: logAvgTime   > slaLogisticsSec ? 'SLA Exceeded' : 'team avg', exceeded: logAvgTime   > slaLogisticsSec },
-      { label: 'Avg Act Handle',   value: fmtTime(actAvgTime),            badge: actAvgTime   > slaActSec       ? 'SLA Exceeded' : 'team avg', exceeded: actAvgTime   > slaActSec },
-    ],
-    columns: ['Agent / Section', 'Assigned', 'Claimed', 'Rate', 'Avg Time', 'Bad Handling'],
-    rows: [
-      ['── SALES ──',      '', '', '', '', ''],
-      ...top5(salesStats),
-      ['── LOGISTICS ──',  '', '', '', '', ''],
-      ...top5(logStats),
-      ['── ACTIVATION ──', '', '', '', '', ''],
-      ...top5(actStats),
-    ],
-  });
+  // ── Generate PDFs by navigating the live app (identical to "Save as PDF")
+  const { salesPDF, logisticsPDF, activationPDF, managementPDF } = await buildAllDeptPDFs(period);
 
   // ── Build per-agent SLA alert emails
   const SLA_ALERT_CC   = ['ali.mohsen@bh.zain.com', 'alaa.alawi@bh.zain.com'];
   const SLA_ALERT_CC_LOG = [...SLA_ALERT_CC, 'NezarN@aramex.com'];
   const agentAlertPromises = [];
+  const slaAlerts = []; // track every breach (sent + skipped) for logging
 
   salesStats.forEach(agent => {
     if (agent.avgTime != null && agent.avgTime > slaSalesSec) {
       const mapping = agentEmailMap[agent.name.toUpperCase()];
       if (mapping?.email) {
+        slaAlerts.push({ agentName: mapping.displayName, department: 'Sales', avgTime: agent.avgTime, slaSeconds: slaSalesSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
           to:      mapping.email,
           cc:      SLA_ALERT_CC,
@@ -905,6 +928,8 @@ async function sendAllReports(importId) {
             claimedLabel: 'Claimed',
           }),
         }));
+      } else {
+        slaAlerts.push({ agentName: agent.name, department: 'Sales', avgTime: agent.avgTime, slaSeconds: slaSalesSec, email: null, status: 'no_email' });
       }
     }
   });
@@ -913,6 +938,7 @@ async function sendAllReports(importId) {
     if (agent.avgTime != null && agent.avgTime > slaLogisticsSec) {
       const mapping = agentEmailMap[agent.name.toUpperCase()];
       if (mapping?.email) {
+        slaAlerts.push({ agentName: mapping.displayName, department: 'Logistics', avgTime: agent.avgTime, slaSeconds: slaLogisticsSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
           to:      mapping.email,
           cc:      SLA_ALERT_CC_LOG,
@@ -932,6 +958,8 @@ async function sendAllReports(importId) {
             claimedLabel: 'Claimed',
           }),
         }));
+      } else {
+        slaAlerts.push({ agentName: agent.name, department: 'Logistics', avgTime: agent.avgTime, slaSeconds: slaLogisticsSec, email: null, status: 'no_email' });
       }
     }
   });
@@ -940,6 +968,7 @@ async function sendAllReports(importId) {
     if (agent.avgTime != null && agent.avgTime > slaActSec) {
       const mapping = agentEmailMap[agent.name.toUpperCase()];
       if (mapping?.email) {
+        slaAlerts.push({ agentName: mapping.displayName, department: 'Activation', avgTime: agent.avgTime, slaSeconds: slaActSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
           to:      mapping.email,
           cc:      SLA_ALERT_CC,
@@ -959,6 +988,8 @@ async function sendAllReports(importId) {
             claimedLabel: 'Completed',
           }),
         }));
+      } else {
+        slaAlerts.push({ agentName: agent.name, department: 'Activation', avgTime: agent.avgTime, slaSeconds: slaActSec, email: null, status: 'no_email' });
       }
     }
   });
@@ -980,6 +1011,17 @@ async function sendAllReports(importId) {
     reports:    ['Sales', 'Logistics', 'Activation', 'Management'],
     recipients: RECIPIENTS,
     status:     'sent',
+    slaAlerts,
+    slaThresholds: {
+      salesSec:     slaSalesSec,
+      logisticsSec: slaLogisticsSec,
+      activationSec: slaActSec,
+    },
+    agentStats: {
+      sales:      salesStats.map(a => ({ name: a.name, avgTime: a.avgTime, orders: a.orders, claimed: a.claimed })),
+      logistics:  logStats.map(a =>   ({ name: a.name, avgTime: a.avgTime, orders: a.orders, claimed: a.claimed })),
+      activation: actStats.map(a =>   ({ name: a.name, avgTime: a.avgTime, orders: a.orders, claimed: a.claimed })),
+    },
   });
 }
 
@@ -1323,5 +1365,141 @@ export const sendReportsNow = onRequest(
       console.error('sendReportsNow error:', err);
       res.status(500).json({ success: false, error: err.message });
     }
+  }
+);
+
+// ─── DOWNLOAD PDF ─────────────────────────────────────────────────────────────
+// Returns the same PDF that would be emailed for a given department + date range.
+// Used by the "Save as PDF" button so both paths produce identical output.
+export const downloadPDF = onRequest(
+  { cors: true, invoker: 'public', memory: '1GiB', timeoutSeconds: 300, region: 'us-central1' },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') { res.status(204).send(''); return; }
+    if (req.method !== 'POST')    { res.status(405).json({ error: 'Method not allowed' }); return; }
+
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    try { await getAuth().verifyIdToken(token); } catch { res.status(401).json({ error: 'Invalid token' }); return; }
+
+    const { dept, from, to } = req.body || {};
+    if (!dept || !from || !to) { res.status(400).json({ error: 'Missing dept, from, or to' }); return; }
+
+    const fromDate = new Date(from);
+    const toDate   = new Date(to);
+    const fromTs   = Timestamp.fromDate(fromDate);
+    const toTs     = Timestamp.fromDate(toDate);
+    const dateRange = `${fromDate.toLocaleDateString('en-GB')} – ${toDate.toLocaleDateString('en-GB')}`;
+
+    const needSales = dept === 'sales'      || dept === 'management';
+    const needLog   = dept === 'logistics'  || dept === 'management';
+    const needAct   = dept === 'activation' || dept === 'management';
+
+    const [salesSnap, logSnap, actSnap, slaSnap] = await Promise.all([
+      needSales ? db.collection('orders').where('orderDT', '>=', fromTs).where('orderDT', '<=', toTs).get()                   : Promise.resolve({ docs: [] }),
+      needLog   ? db.collection('logisticsOrders').where('assignDT', '>=', fromTs).where('assignDT', '<=', toTs).get()        : Promise.resolve({ docs: [] }),
+      needAct   ? db.collection('activationOrders').where('assignDT', '>=', fromTs).where('assignDT', '<=', toTs).get()       : Promise.resolve({ docs: [] }),
+      db.collection('slaSettings').limit(1).get(),
+    ]);
+
+    const slaData         = slaSnap.empty ? {} : slaSnap.docs[0].data();
+    const slaSalesSec     = ((slaData.sales      || {}).workingHours || 120) * 60;
+    const slaLogisticsSec = ((slaData.logistics  || {}).workingHours || 120) * 60;
+    const slaActSec       = ((slaData.activation || {}).workingHours || 120) * 60;
+
+    const salesStats = statsFromDocs(salesSnap.docs, 'claimTimeSec');
+    const logStats   = statsFromDocs(logSnap.docs,   'claimTimeSec');
+    const actStats   = statsFromDocs(actSnap.docs,   'handleTimeSec');
+
+    const salesAvgTime = safeAvg(salesStats.map(a => a.avgTime).filter(Boolean));
+    const logAvgTime   = safeAvg(logStats.map(a => a.avgTime).filter(Boolean));
+    const actAvgTime   = safeAvg(actStats.map(a => a.avgTime).filter(Boolean));
+    const totalOrders  = salesSnap.docs.length;
+    const totalClaimed = salesSnap.docs.filter(d => d.data().claimed).length;
+
+    let pdfBuffer;
+
+    if (dept === 'sales') {
+      const rate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
+      pdfBuffer = await buildPDF({
+        title: 'Sales Performance Report', department: 'sales', dateRange, slaSeconds: slaSalesSec,
+        kpis: [
+          { label: 'Total Orders',   value: totalOrders.toLocaleString(),   badge: 'total' },
+          { label: 'Claimed',        value: totalClaimed.toLocaleString(),  badge: `${rate}% rate` },
+          { label: 'Claim Rate',     value: `${rate}%`,                     badge: 'of orders' },
+          { label: 'Avg Claim Time', value: fmtTime(salesAvgTime),          badge: salesAvgTime > slaSalesSec ? 'SLA Exceeded' : 'team avg', exceeded: salesAvgTime > slaSalesSec },
+          { label: 'Agents',         value: String(salesStats.length),      badge: 'active' },
+        ],
+        columns: ['Agent', 'Orders', 'Claimed', 'Claim Rate', 'Avg Claim Time', 'Bad Handling'],
+        rows: salesStats,
+      });
+    } else if (dept === 'logistics') {
+      const logOrders  = logStats.reduce((s, a) => s + a.orders,  0);
+      const logClaimed = logStats.reduce((s, a) => s + a.claimed, 0);
+      const rate = logOrders ? Math.round(logClaimed / logOrders * 100) : 0;
+      pdfBuffer = await buildPDF({
+        title: 'Logistics Performance Report', department: 'logistics', dateRange, slaSeconds: slaLogisticsSec,
+        kpis: [
+          { label: 'Total Assigned', value: logOrders.toLocaleString(),    badge: 'total' },
+          { label: 'Claimed',        value: logClaimed.toLocaleString(),   badge: `${rate}% rate` },
+          { label: 'Claim Rate',     value: `${rate}%`,                    badge: 'of assigned' },
+          { label: 'Avg Claim Time', value: fmtTime(logAvgTime),           badge: logAvgTime > slaLogisticsSec ? 'SLA Exceeded' : 'team avg', exceeded: logAvgTime > slaLogisticsSec },
+          { label: 'Agents',         value: String(logStats.length),       badge: 'active' },
+        ],
+        columns: ['Agent', 'Assigned', 'Claimed', 'Claim Rate', 'Avg Claim Time', 'Bad Handling'],
+        rows: logStats,
+      });
+    } else if (dept === 'activation') {
+      const actOrders  = actStats.reduce((s, a) => s + a.orders,  0);
+      const actClaimed = actStats.reduce((s, a) => s + a.claimed, 0);
+      const rate = actOrders ? Math.round(actClaimed / actOrders * 100) : 0;
+      pdfBuffer = await buildPDF({
+        title: 'Activation Performance Report', department: 'activation', dateRange, slaSeconds: slaActSec,
+        kpis: [
+          { label: 'Total Assigned',  value: actOrders.toLocaleString(),   badge: 'total' },
+          { label: 'Completed',       value: actClaimed.toLocaleString(),  badge: `${rate}% rate` },
+          { label: 'Completion Rate', value: `${rate}%`,                   badge: 'of assigned' },
+          { label: 'Avg Handle Time', value: fmtTime(actAvgTime),          badge: actAvgTime > slaActSec ? 'SLA Exceeded' : 'team avg', exceeded: actAvgTime > slaActSec },
+          { label: 'Agents',          value: String(actStats.length),      badge: 'active' },
+        ],
+        columns: ['Agent', 'Assigned', 'Completed', 'Completion Rate', 'Avg Handle Time', 'Bad Handling'],
+        rows: actStats,
+      });
+    } else if (dept === 'management') {
+      const salesRate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
+      const top5 = arr => arr.slice(0, 5);
+      pdfBuffer = await buildPDF({
+        title: 'Management Summary Report', department: 'management', dateRange,
+        slaSeconds: Math.min(slaSalesSec, slaLogisticsSec, slaActSec),
+        kpis: [
+          { label: 'Total Orders',     value: totalOrders.toLocaleString(),  badge: 'total' },
+          { label: 'Sales Claim Rate', value: `${salesRate}%`,               badge: 'sales' },
+          { label: 'Avg Sales Claim',  value: fmtTime(salesAvgTime),         badge: salesAvgTime > slaSalesSec     ? 'SLA Exceeded' : 'team avg', exceeded: salesAvgTime > slaSalesSec },
+          { label: 'Avg Log Claim',    value: fmtTime(logAvgTime),           badge: logAvgTime   > slaLogisticsSec ? 'SLA Exceeded' : 'team avg', exceeded: logAvgTime   > slaLogisticsSec },
+          { label: 'Avg Act Handle',   value: fmtTime(actAvgTime),           badge: actAvgTime   > slaActSec       ? 'SLA Exceeded' : 'team avg', exceeded: actAvgTime   > slaActSec },
+        ],
+        columns: ['Agent / Section', 'Assigned', 'Claimed', 'Rate', 'Avg Time', 'Bad Handling'],
+        rows: [
+          ['── SALES ──',      '', '', '', '', ''],
+          ...top5(salesStats),
+          ['── LOGISTICS ──',  '', '', '', '', ''],
+          ...top5(logStats),
+          ['── ACTIVATION ──', '', '', '', '', ''],
+          ...top5(actStats),
+        ],
+      });
+    } else {
+      res.status(400).json({ error: `Unknown dept: ${dept}` });
+      return;
+    }
+
+    const filename = `${dept}-performance-report.pdf`;
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdfBuffer);
   }
 );

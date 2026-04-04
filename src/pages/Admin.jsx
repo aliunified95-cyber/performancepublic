@@ -1329,6 +1329,7 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState('import');
   const [emailHistory, setEmailHistory]     = useState([]);
   const [emailHistoryLoading, setEmailHistoryLoading] = useState(false);
+  const [expandedEmailStats, setExpandedEmailStats] = useState({});
   const [retrying, setRetrying]             = useState(false);
   const [sendCard, setSendCard]             = useState(null);
   const sendUnsubRef                        = useRef(null);
@@ -2244,6 +2245,7 @@ export default function Admin() {
                     <th>Orders</th>
                     <th>Reports</th>
                     <th>Recipients</th>
+                    <th>SLA Alerts</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -2257,25 +2259,114 @@ export default function Admin() {
                       ...(item.recipients?.management || []),
                     ];
                     const uniqueRecipients = [...new Set(allRecipients)];
+                    const alerts = item.slaAlerts || [];
+                    const sentAlerts    = alerts.filter(a => a.status === 'sent');
+                    const skippedAlerts = alerts.filter(a => a.status === 'no_email');
+                    const hasStats = item.agentStats && (
+                      (item.agentStats.sales?.length > 0) ||
+                      (item.agentStats.logistics?.length > 0) ||
+                      (item.agentStats.activation?.length > 0)
+                    );
+                    const isExpanded = expandedEmailStats[item.id];
+                    const thresholds = item.slaThresholds || {};
+                    const fmtSec = s => s == null ? '—' : `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
                     return (
-                      <tr key={item.id}>
-                        <td>{ts.toLocaleString('en-GB')}</td>
-                        <td>{item.dateRange || '—'}</td>
-                        <td>{item.rowCount?.toLocaleString() || '—'}</td>
-                        <td>
-                          {(item.reports || []).map(r => (
-                            <span key={r} className="badge">{r}</span>
-                          ))}
-                        </td>
-                        <td style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
-                          {uniqueRecipients.join(', ')}
-                        </td>
-                        <td>
-                          <span className={`status-pill ${item.status === 'sent' ? 'status-claimed' : 'status-unclaimed'}`}>
-                            {item.status}
-                          </span>
-                        </td>
-                      </tr>
+                      <>
+                        <tr key={item.id}>
+                          <td>{ts.toLocaleString('en-GB')}</td>
+                          <td>{item.dateRange || '—'}</td>
+                          <td>{item.rowCount?.toLocaleString() || '—'}</td>
+                          <td>
+                            {(item.reports || []).map(r => (
+                              <span key={r} className="badge">{r}</span>
+                            ))}
+                          </td>
+                          <td style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
+                            {uniqueRecipients.join(', ')}
+                          </td>
+                          <td style={{ fontSize: '12px' }}>
+                            {alerts.length === 0 ? (
+                              <span style={{ color: 'var(--text-dim)' }}>None</span>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {sentAlerts.map((a, i) => (
+                                  <div key={i} title={`Sent to: ${a.email}`}>
+                                    <span className="status-pill status-claimed" style={{ fontSize: '11px', marginRight: '4px' }}>Sent</span>
+                                    <span style={{ color: 'var(--text-dim)' }}>[{a.department}]</span> {a.agentName}
+                                  </div>
+                                ))}
+                                {skippedAlerts.map((a, i) => (
+                                  <div key={i} title="No email in agent mapping">
+                                    <span className="status-pill status-unclaimed" style={{ fontSize: '11px', marginRight: '4px' }}>No Email</span>
+                                    <span style={{ color: 'var(--text-dim)' }}>[{a.department}]</span> {a.agentName}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {hasStats && (
+                              <button
+                                onClick={() => setExpandedEmailStats(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
+                                style={{ marginTop: '4px', fontSize: '11px', background: 'none', border: '1px solid var(--border)', borderRadius: '4px', padding: '2px 8px', cursor: 'pointer', color: 'var(--text-dim)' }}
+                              >
+                                {isExpanded ? 'Hide Stats' : 'View Backend Stats'}
+                              </button>
+                            )}
+                          </td>
+                          <td>
+                            <span className={`status-pill ${item.status === 'sent' ? 'status-claimed' : 'status-unclaimed'}`}>
+                              {item.status}
+                            </span>
+                          </td>
+                        </tr>
+                        {isExpanded && hasStats && (
+                          <tr key={`${item.id}-stats`}>
+                            <td colSpan={7} style={{ background: 'var(--surface)', padding: '12px 16px', fontSize: '12px' }}>
+                              <div style={{ marginBottom: '6px', color: 'var(--text-dim)', fontWeight: 600 }}>
+                                Backend-computed agent stats for this send (SLA: Sales {fmtSec(thresholds.salesSec)} · Logistics {fmtSec(thresholds.logisticsSec)} · Activation {fmtSec(thresholds.activationSec)})
+                              </div>
+                              {['sales', 'logistics', 'activation'].map(dept => {
+                                const agents = item.agentStats[dept] || [];
+                                if (!agents.length) return null;
+                                const slaSec = dept === 'sales' ? thresholds.salesSec : dept === 'logistics' ? thresholds.logisticsSec : thresholds.activationSec;
+                                return (
+                                  <div key={dept} style={{ marginBottom: '10px' }}>
+                                    <div style={{ fontWeight: 600, textTransform: 'capitalize', marginBottom: '4px' }}>{dept}</div>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                                      <thead>
+                                        <tr style={{ background: 'var(--bg)' }}>
+                                          <th style={{ padding: '4px 8px', textAlign: 'left', border: '1px solid var(--border)' }}>Agent</th>
+                                          <th style={{ padding: '4px 8px', textAlign: 'right', border: '1px solid var(--border)' }}>Orders</th>
+                                          <th style={{ padding: '4px 8px', textAlign: 'right', border: '1px solid var(--border)' }}>Claimed</th>
+                                          <th style={{ padding: '4px 8px', textAlign: 'right', border: '1px solid var(--border)' }}>Avg Time</th>
+                                          <th style={{ padding: '4px 8px', textAlign: 'center', border: '1px solid var(--border)' }}>SLA</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {agents.map((a, i) => {
+                                          const over = a.avgTime != null && slaSec != null && a.avgTime > slaSec;
+                                          return (
+                                            <tr key={i} style={{ background: over ? 'rgba(231,76,60,0.06)' : 'inherit' }}>
+                                              <td style={{ padding: '3px 8px', border: '1px solid var(--border)' }}>{a.name}</td>
+                                              <td style={{ padding: '3px 8px', border: '1px solid var(--border)', textAlign: 'right' }}>{a.orders}</td>
+                                              <td style={{ padding: '3px 8px', border: '1px solid var(--border)', textAlign: 'right' }}>{a.claimed}</td>
+                                              <td style={{ padding: '3px 8px', border: '1px solid var(--border)', textAlign: 'right', color: over ? '#E74C3C' : 'inherit', fontWeight: over ? 600 : 'inherit' }}>
+                                                {a.avgTime == null ? '—' : fmtSec(a.avgTime)}
+                                              </td>
+                                              <td style={{ padding: '3px 8px', border: '1px solid var(--border)', textAlign: 'center' }}>
+                                                {over ? <span style={{ color: '#E74C3C', fontWeight: 600 }}>BREACH</span> : <span style={{ color: 'var(--text-dim)' }}>OK</span>}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                );
+                              })}
+                            </td>
+                          </tr>
+                        )}
+                      </>
                     );
                   })}
                 </tbody>
