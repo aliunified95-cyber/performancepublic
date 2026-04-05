@@ -493,6 +493,7 @@ async function renderAndPrint(page, path, waitSelector) {
 // Launch one browser, generate all four department PDFs by navigating to the
 // actual live app pages — identical to what "Save as PDF" produces per page.
 async function buildAllDeptPDFs(period) {
+  console.log('[buildAllDeptPDFs] starting for period:', period.label);
   const authState = await getAuthStateForPuppeteer();
   const fromStr   = period.from.toISOString().slice(0, 10);
   const toStr     = period.to.toISOString().slice(0, 10);
@@ -517,12 +518,20 @@ async function buildAllDeptPDFs(period) {
       localStorage.setItem('tpw_filter_to',   to);
     }, authKey, JSON.stringify(authState), fromStr, toStr);
 
+    console.log('[buildAllDeptPDFs] rendering Sales (/performance)...');
     const salesPDF      = await renderAndPrint(pg, '/performance', '.table-wrap');
+    console.log('[buildAllDeptPDFs] rendering Logistics (/logistics)...');
     const logisticsPDF  = await renderAndPrint(pg, '/logistics',   '.table-wrap');
+    console.log('[buildAllDeptPDFs] rendering Activation (/activation)...');
     const activationPDF = await renderAndPrint(pg, '/activation',  '.table-wrap');
+    console.log('[buildAllDeptPDFs] rendering Management (/dashboard)...');
     const managementPDF = await renderAndPrint(pg, '/dashboard',   '.hero-badge');
 
+    console.log('[buildAllDeptPDFs] all 4 PDFs rendered successfully');
     return { salesPDF, logisticsPDF, activationPDF, managementPDF };
+  } catch (err) {
+    console.error('[buildAllDeptPDFs] Puppeteer render failed:', err.message, err.stack);
+    throw err;
   } finally {
     await browser.close();
   }
@@ -896,7 +905,9 @@ async function sendAllReports(importId) {
     </div>`;
 
   // ── Generate PDFs by navigating the live app (identical to "Save as PDF")
+  console.log('[sendAllReports] generating PDFs via live app render...');
   const { salesPDF, logisticsPDF, activationPDF, managementPDF } = await buildAllDeptPDFs(period);
+  console.log('[sendAllReports] PDFs ready, sending emails...');
 
   // ── Build per-agent SLA alert emails
   const SLA_ALERT_CC   = ['ali.mohsen@bh.zain.com', 'alaa.alawi@bh.zain.com'];
