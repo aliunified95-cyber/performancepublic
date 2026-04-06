@@ -25,6 +25,8 @@ const RECIPIENTS = {
   management: (process.env.MANAGEMENT_RECIPIENTS || '').split(',').map(s => s.trim()).filter(Boolean),
 };
 
+const TEST_RECIPIENT = 'ali.mohsen@bh.zain.com';
+
 const WORKING_HOURS = {
   sales: { start: 9, end: 22 },
   logistics: { start: 9, end: 20 },
@@ -442,22 +444,42 @@ function buildActivationStats(rows) {
 const FIREBASE_WEB_API_KEY = 'AIzaSyBC9TKA8shfMD64qfQPJJ3DvdC7hbkxamc';
 const APP_BASE_URL         = 'https://performer-2df35.web.app';
 
-// Exchange a Firebase Admin custom token for a browser-usable auth state object
-// so Puppeteer can inject it into localStorage and access protected pages.
+// Sign in as the dedicated PDF renderer Firebase user using email/password.
+// This avoids createCustomToken() which requires the iam.serviceAccounts.signBlob
+// IAM permission that is often missing on the default Cloud Functions service account.
+const PDF_RENDERER_EMAIL    = 'pdf-renderer@performer-2df35.firebaseapp.com';
+const PDF_RENDERER_PASSWORD = process.env.PDF_RENDERER_PASSWORD || 'Tpw_Pdf_R3nd3r_2df35!';
+
 async function getAuthStateForPuppeteer() {
-  const customToken = await getAuth().createCustomToken('pdf-render-service');
+  // Ensure the dedicated renderer account exists (creates it on first run)
+  try {
+    await getAuth().getUserByEmail(PDF_RENDERER_EMAIL);
+  } catch (err) {
+    if (err.code === 'auth/user-not-found') {
+      await getAuth().createUser({
+        email:       PDF_RENDERER_EMAIL,
+        password:    PDF_RENDERER_PASSWORD,
+        displayName: 'PDF Renderer Service',
+      });
+      console.log('[getAuthStateForPuppeteer] created pdf-renderer user');
+    } else {
+      throw err;
+    }
+  }
+
+  // Sign in via REST API — no signBlob permission required
   const resp = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${FIREBASE_WEB_API_KEY}`,
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_WEB_API_KEY}`,
     {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ token: customToken, returnSecureToken: true }),
+      body:    JSON.stringify({ email: PDF_RENDERER_EMAIL, password: PDF_RENDERER_PASSWORD, returnSecureToken: true }),
     }
   );
-  if (!resp.ok) throw new Error(`Firebase token exchange failed: ${await resp.text()}`);
+  if (!resp.ok) throw new Error(`PDF renderer sign-in failed: ${await resp.text()}`);
   const { idToken, refreshToken, localId, expiresIn } = await resp.json();
   return {
-    uid: localId, email: null, emailVerified: false, displayName: null,
+    uid: localId, email: PDF_RENDERER_EMAIL, emailVerified: false, displayName: 'PDF Renderer Service',
     isAnonymous: false, photoURL: null, phoneNumber: null, tenantId: null,
     providerData: [],
     stsTokenManager: {
@@ -842,8 +864,13 @@ function buildAgentSlaAlertHtml({ agentName, department, dateRange, avgTime, sla
 }
 
 // ─── GENERATE + SEND ALL REPORTS ─────────────────────────────────────────────
-async function sendAllReports(importId) {
+async function sendAllReports(importId, testRecipient = null) {
   if (!GMAIL_USER || !GMAIL_PASS) return;
+
+  const effectiveRecipients = testRecipient
+    ? { sales: [testRecipient], logistics: [testRecipient], activation: [testRecipient], management: [testRecipient] }
+    : RECIPIENTS;
+  const subjectPrefix = testRecipient ? '[TEST] ' : '';
 
   // Determine which period to report on based on today's date
   const period = getReportPeriod();
@@ -859,12 +886,16 @@ async function sendAllReports(importId) {
     db.collection('agentMappings').get(),
   ]);
 
-  // Build a map of agentCode -> { email, displayName }
+  // Build a map of agentCode -> { email, displayName, agentType }
   const agentEmailMap = {};
   mappingsSnap.docs.forEach(d => {
     const m = d.data();
     if (m.agentCode && m.email) {
-      agentEmailMap[m.agentCode.toUpperCase()] = { email: m.email.trim(), displayName: m.displayName || m.agentCode };
+      agentEmailMap[m.agentCode.toUpperCase()] = {
+        email:       m.email.trim(),
+        displayName: m.displayName || m.agentCode,
+        agentType:   m.agentType   || null,
+      };
     }
   });
 
@@ -909,15 +940,18 @@ async function sendAllReports(importId) {
   const { salesPDF, logisticsPDF, activationPDF, managementPDF } = await buildAllDeptPDFs(period);
   console.log('[sendAllReports] PDFs ready, sending emails...');
 
-  // ── Build per-agent SLA alert emails
+  // ── Build per-agent SLA alert emails (skipped entirely in test mode)
   const SLA_ALERT_CC   = ['ali.mohsen@bh.zain.com', 'alaa.alawi@bh.zain.com'];
   const SLA_ALERT_CC_LOG = [...SLA_ALERT_CC, 'NezarN@aramex.com'];
   const agentAlertPromises = [];
   const slaAlerts = []; // track every breach (sent + skipped) for logging
 
   salesStats.forEach(agent => {
+    if (testRecipient) return; // skip alerts in test mode
+    const mapping = agentEmailMap[agent.name.toUpperCase()];
+    // Only alert for this agent's primary department to avoid duplicate emails
+    if (mapping?.agentType && mapping.agentType !== 'sales') return;
     if (agent.avgTime != null && agent.avgTime > slaSalesSec) {
-      const mapping = agentEmailMap[agent.name.toUpperCase()];
       if (mapping?.email) {
         slaAlerts.push({ agentName: mapping.displayName, department: 'Sales', avgTime: agent.avgTime, slaSeconds: slaSalesSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
@@ -946,8 +980,10 @@ async function sendAllReports(importId) {
   });
 
   logStats.forEach(agent => {
+    if (testRecipient) return; // skip alerts in test mode
+    const mapping = agentEmailMap[agent.name.toUpperCase()];
+    if (mapping?.agentType && mapping.agentType !== 'logistics') return;
     if (agent.avgTime != null && agent.avgTime > slaLogisticsSec) {
-      const mapping = agentEmailMap[agent.name.toUpperCase()];
       if (mapping?.email) {
         slaAlerts.push({ agentName: mapping.displayName, department: 'Logistics', avgTime: agent.avgTime, slaSeconds: slaLogisticsSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
@@ -976,8 +1012,10 @@ async function sendAllReports(importId) {
   });
 
   actStats.forEach(agent => {
+    if (testRecipient) return; // skip alerts in test mode
+    const mapping = agentEmailMap[agent.name.toUpperCase()];
+    if (mapping?.agentType && mapping.agentType !== 'activation') return;
     if (agent.avgTime != null && agent.avgTime > slaActSec) {
-      const mapping = agentEmailMap[agent.name.toUpperCase()];
       if (mapping?.email) {
         slaAlerts.push({ agentName: mapping.displayName, department: 'Activation', avgTime: agent.avgTime, slaSeconds: slaActSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
@@ -1006,11 +1044,11 @@ async function sendAllReports(importId) {
   });
 
   await Promise.all([
-    sendReport({ to: RECIPIENTS.sales,      subject: `Sales Performance Report – ${dateRange}`,      html: emailHtml('Sales'),      pdfBuffer: salesPDF,      filename: `sales-report-${dateTag}.pdf` }),
-    sendReport({ to: RECIPIENTS.logistics,  subject: `Logistics Performance Report – ${dateRange}`,  html: emailHtml('Logistics'),  pdfBuffer: logisticsPDF,  filename: `logistics-report-${dateTag}.pdf` }),
-    sendReport({ to: RECIPIENTS.activation, subject: `Activation Performance Report – ${dateRange}`, html: emailHtml('Activation'), pdfBuffer: activationPDF, filename: `activation-report-${dateTag}.pdf` }),
-    sendReport({ to: RECIPIENTS.management, subject: `Management Summary Report – ${dateRange}`,     html: emailHtml('Management'), pdfBuffer: managementPDF, filename: `management-report-${dateTag}.pdf` }),
-    ...agentAlertPromises,
+    sendReport({ to: effectiveRecipients.sales,      subject: `${subjectPrefix}Sales Performance Report – ${dateRange}`,      html: emailHtml('Sales'),      pdfBuffer: salesPDF,      filename: `sales-report-${dateTag}.pdf` }),
+    sendReport({ to: effectiveRecipients.logistics,  subject: `${subjectPrefix}Logistics Performance Report – ${dateRange}`,  html: emailHtml('Logistics'),  pdfBuffer: logisticsPDF,  filename: `logistics-report-${dateTag}.pdf` }),
+    sendReport({ to: effectiveRecipients.activation, subject: `${subjectPrefix}Activation Performance Report – ${dateRange}`, html: emailHtml('Activation'), pdfBuffer: activationPDF, filename: `activation-report-${dateTag}.pdf` }),
+    sendReport({ to: effectiveRecipients.management, subject: `${subjectPrefix}Management Summary Report – ${dateRange}`,     html: emailHtml('Management'), pdfBuffer: managementPDF, filename: `management-report-${dateTag}.pdf` }),
+    ...(testRecipient ? [] : agentAlertPromises),
   ]);
 
   // Save to email history
@@ -1020,8 +1058,9 @@ async function sendAllReports(importId) {
     dateRange,
     rowCount:   totalOrders,
     reports:    ['Sales', 'Logistics', 'Activation', 'Management'],
-    recipients: RECIPIENTS,
+    recipients: effectiveRecipients,
     status:     'sent',
+    isTest:     !!testRecipient,
     slaAlerts,
     slaThresholds: {
       salesSec:     slaSalesSec,
@@ -1374,6 +1413,45 @@ export const sendReportsNow = onRequest(
       res.status(200).json({ success: true });
     } catch (err) {
       console.error('sendReportsNow error:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+// ─── HTTP: SEND TEST REPORTS (to TEST_RECIPIENT only) ─────────────────────────
+export const sendTestReportsNow = onRequest(
+  { cors: true, invoker: 'public', memory: '1GiB', timeoutSeconds: 540, region: 'us-central1' },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') { res.status(204).send(''); return; }
+    if (req.method !== 'POST')    { res.status(405).json({ error: 'Method not allowed' }); return; }
+
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    try { await getAuth().verifyIdToken(token); } catch { res.status(401).json({ error: 'Invalid token' }); return; }
+
+    // Guard: real auto email must have been sent today before allowing a test send.
+    // Filter isTest in-memory to avoid needing a Firestore composite index.
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const sentTodaySnap = await db.collection('emailHistory')
+      .where('sentAt', '>=', Timestamp.fromDate(todayStart))
+      .get();
+    const hasRealEmailToday = sentTodaySnap.docs.some(d => !d.data().isTest);
+    if (!hasRealEmailToday) {
+      res.status(400).json({ error: 'Real reports have not been sent today yet. Send real reports first.' });
+      return;
+    }
+
+    try {
+      const importId = req.body?.importId || null;
+      await sendAllReports(importId, TEST_RECIPIENT);
+      res.status(200).json({ success: true });
+    } catch (err) {
+      console.error('sendTestReportsNow error:', err);
       res.status(500).json({ success: false, error: err.message });
     }
   }

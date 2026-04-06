@@ -5,6 +5,7 @@ import {
   orderBy,
   limit,
   getDocs,
+  where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import Navbar from '../components/Navbar';
@@ -71,6 +72,41 @@ function getRangeBounds(range, customDates) {
   return null;
 }
 
+function getPrevRangeBounds(range) {
+  const now = new Date();
+  const y   = now.getFullYear();
+  const mo  = now.getMonth();
+  const d   = now.getDate();
+
+  if (range === 'today')     return { from: new Date(y, mo, d - 1, 0, 0, 0),     to: new Date(y, mo, d - 1, 23, 59, 59) };
+  if (range === 'yesterday') return { from: new Date(y, mo, d - 2, 0, 0, 0),     to: new Date(y, mo, d - 2, 23, 59, 59) };
+  if (range === 'week') {
+    const weekStart = new Date(y, mo, d - now.getDay());
+    const prevEnd   = new Date(weekStart.getTime() - 1000);
+    const prevStart = new Date(weekStart.getTime() - 7 * 86400000);
+    return { from: prevStart, to: prevEnd };
+  }
+  if (range === 'month' || range === 'mtd') return { from: new Date(y, mo - 1, 1, 0, 0, 0), to: new Date(y, mo, 0, 23, 59, 59) };
+  if (range === 'lastmonth')                return { from: new Date(y, mo - 2, 1, 0, 0, 0), to: new Date(y, mo - 1, 0, 23, 59, 59) };
+  if (range === 'quarter') {
+    const qStart = Math.floor(mo / 3) * 3;
+    return { from: new Date(y, qStart - 3, 1, 0, 0, 0), to: new Date(y, qStart, 0, 23, 59, 59) };
+  }
+  if (range === 'annual') return { from: new Date(y - 1, 0, 1, 0, 0, 0), to: new Date(y - 1, 11, 31, 23, 59, 59) };
+  return null;
+}
+
+function getPrevRangeLabel(range) {
+  if (range === 'today')                    return 'yesterday';
+  if (range === 'yesterday')                return 'day before';
+  if (range === 'week')                     return 'last week';
+  if (range === 'month' || range === 'mtd') return 'last month';
+  if (range === 'lastmonth')                return 'month before';
+  if (range === 'quarter')                  return 'last quarter';
+  if (range === 'annual')                   return 'last year';
+  return null;
+}
+
 // ─── SUB-COMPONENTS ────────────────────────────────────────────────────────────
 function LoadingState() {
   return (
@@ -87,6 +123,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
   const totalBadHandling = data.reduce((s, a) => s + (a.badHandlingCount || 0), 0);
   const avgClaim       = Math.round(avg(data.map(a => a.avgClaimTimeSec)));
   const avgActivation  = Math.round(avg(data.map(a => a.activationAssignTimeSec)));
+  const avgAssignToAwb = Math.round(avg(data.map(a => a.avgAssignToAwbSec).filter(v => v > 0)));
   const claimRate      = totalOrders > 0 ? Math.round((totalClaimed / totalOrders) * 100) : 0;
   const slaSeconds = (slaMinutes || 120) * 60;
   const isSLAExceeded = avgClaim > slaSeconds;
@@ -103,6 +140,8 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
   const cm = Math.floor((avgClaim % 3600) / 60);
   const ah = Math.floor(avgActivation / 3600);
   const am = Math.floor((avgActivation % 3600) / 60);
+  const wh = Math.floor(avgAssignToAwb / 3600);
+  const wm = Math.floor((avgAssignToAwb % 3600) / 60);
 
   return (
     <div className="hero-badge">
@@ -114,7 +153,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
         All Agents · {label} · {src}
       </div>
 
-      <div className="hero-kpis" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
+      <div className="hero-kpis" style={{ gridTemplateColumns: 'repeat(7, 1fr)' }}>
         {/* Total Assigned */}
         <div className="hero-kpi">
           <div className="hero-kpi-icon" style={{ background: 'rgba(46,204,138,0.18)' }}>
@@ -203,12 +242,29 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
           <div className="hero-kpi-label">Bad Handling</div>
           <span className="hero-kpi-badge badge-neu">&gt; 1000 min</span>
         </div>
+
+        {/* Avg Assign → AWB Creation */}
+        <div className="hero-kpi">
+          <div className="hero-kpi-icon" style={{ background: 'rgba(0,188,212,0.15)' }}>
+            <svg viewBox="0 0 24 24" style={{ stroke: '#00BCD4' }} fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="1" y="3" width="15" height="13" rx="1"/>
+              <path d="M16 8h4l3 3v5h-7V8z"/>
+              <circle cx="5.5" cy="18.5" r="2.5"/>
+              <circle cx="18.5" cy="18.5" r="2.5"/>
+            </svg>
+          </div>
+          <div className="hero-kpi-value" style={{ color: avgAssignToAwb > 0 ? '#00BCD4' : 'inherit' }}>
+            {avgAssignToAwb > 0 ? <>{wh}<sup>h {String(wm).padStart(2, '0')}m</sup></> : '—'}
+          </div>
+          <div className="hero-kpi-label">Avg Assign → AWB</div>
+          <span className="hero-kpi-badge" style={{ background: 'rgba(0,188,212,0.12)', color: '#00BCD4' }}>assignment → AWB creation</span>
+        </div>
       </div>
     </div>
   );
 }
 
-function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPage, slaMinutes, onAgentClick }) {
+function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPage, slaMinutes, onAgentClick, compLabel }) {
   const slaSeconds = (slaMinutes || 120) * 60;
   const query2 = searchQuery.toLowerCase();
   let filtered = data.filter(a =>
@@ -219,13 +275,14 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
     const { col, dir } = sortState;
     if (col === 'name')       return dir === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
     if (col === 'status')     return dir === 'asc' ? (a.status||'').localeCompare(b.status||'') : (b.status||'').localeCompare(a.status||'');
-    if (col === 'trend')      return dir === 'asc' ? (a.trend||'').localeCompare(b.trend||'') : (b.trend||'').localeCompare(a.trend||'');
+    if (col === 'trend')      return dir === 'asc' ? (a.trendPct||0) - (b.trendPct||0) : (b.trendPct||0) - (a.trendPct||0);
     let av, bv;
     if (col === 'total')              { av = a.total;              bv = b.total; }
     else if (col === 'claimed')       { av = a.claimed;            bv = b.claimed; }
     else if (col === 'claimRate')     { av = a.claimed / Math.max(1, a.total); bv = b.claimed / Math.max(1, b.total); }
     else if (col === 'claimTime')     { av = a.avgClaimTimeSec;    bv = b.avgClaimTimeSec; }
     else if (col === 'activationTime'){ av = a.activationAssignTimeSec; bv = b.activationAssignTimeSec; }
+    else if (col === 'assignToAwb')   { av = a.avgAssignToAwbSec || 0; bv = b.avgAssignToAwbSec || 0; }
     else if (col === 'badHandling')   { av = a.badHandlingCount || 0; bv = b.badHandlingCount || 0; }
     else { av = a.total; bv = b.total; }
     return dir === 'asc' ? av - bv : bv - av;
@@ -243,6 +300,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
     { key: 'claimRate',      label: 'Claim Rate' },
     { key: 'claimTime',      label: 'Avg Claim Time' },
     { key: 'activationTime', label: 'Avg to Activation' },
+    { key: 'assignToAwb',    label: 'Avg Assign → AWB' },
     { key: 'badHandling',    label: 'Bad Handling' },
     { key: 'status',         label: 'Status' },
     { key: 'trend',          label: 'Trend' },
@@ -295,7 +353,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
           <tbody>
             {paged.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
+                <td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
                   No agents found
                 </td>
               </tr>
@@ -349,6 +407,9 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                     )}
                   </td>
                   <td className="num-cell">{fmtTime(agent.activationAssignTimeSec)}</td>
+                  <td className="num-cell" style={{ color: agent.avgAssignToAwbSec > 0 ? '#00BCD4' : 'var(--text-dim)' }}>
+                    {agent.avgAssignToAwbSec > 0 ? fmtTime(agent.avgAssignToAwbSec) : '—'}
+                  </td>
                   <td className="num-cell">
                     {(agent.badHandlingCount || 0) > 0 ? (
                       <span className="sla-exceeded" style={{ color: '#E74C3C', fontWeight: 600 }}>
@@ -362,9 +423,28 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                     <span className={`status-pill ${statusCls}`}>{statusLabel}</span>
                   </td>
                   <td>
-                    {agent.trend === 'up'   && <span className="trend-up">▲ Up</span>}
-                    {agent.trend === 'down' && <span className="trend-down">▼ Down</span>}
-                    {(!agent.trend || agent.trend === 'neutral') && <span className="trend-neu">— Neutral</span>}
+                    {agent.trend === 'improving' && (
+                      <div>
+                        <span className="trend-up">
+                          ▲ Improving {agent.trendPct !== 0 && <span style={{ fontSize: '10px', opacity: 0.8 }}>{Math.abs(agent.trendPct)}%</span>}
+                        </span>
+                        {compLabel && <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>vs {compLabel}</div>}
+                      </div>
+                    )}
+                    {agent.trend === 'declining' && (
+                      <div>
+                        <span className="trend-down">
+                          ▼ Declining {agent.trendPct !== 0 && <span style={{ fontSize: '10px', opacity: 0.8 }}>{Math.abs(agent.trendPct)}%</span>}
+                        </span>
+                        {compLabel && <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>vs {compLabel}</div>}
+                      </div>
+                    )}
+                    {(!agent.trend || agent.trend === 'neutral') && (
+                      <div>
+                        <span className="trend-neu">— Neutral</span>
+                        {compLabel && <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>vs {compLabel}</div>}
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
@@ -415,6 +495,7 @@ export default function LogisticsPerformance() {
   const [loadState, setLoadState]     = useState('loading');
   const [importMeta, setImportMeta]   = useState(null);
   const [allOrders, setAllOrders]     = useState([]);
+  const [awbMap, setAwbMap]           = useState({});
   const [agentMappings, setAgentMappings] = useState([]);
   const [currentRange, setCurrentRange] = useState(() => localStorage.getItem('tpw_filter_range') || 'month');
   const [customDates, setCustomDates] = useState(() => ({
@@ -485,6 +566,17 @@ export default function LogisticsPerformance() {
 
       setAllOrders(orders);
 
+      // Load delivery shipments to compute assign→AWB time (join by awb === orderNo)
+      const deliverySnap = await getDocs(query(collection(db, 'deliveryShipments'), orderBy('shipmentDate', 'desc'), limit(10000)));
+      const map = {};
+      deliverySnap.docs.forEach(d => {
+        const data = d.data();
+        if (data.awb && data.awbToLogisticsSec != null) {
+          map[data.awb] = data.awbToLogisticsSec;
+        }
+      });
+      setAwbMap(map);
+
       // Load agent mappings for dashboard display/hide settings
       const mappingsSnap = await getDocs(query(collection(db, 'agentMappings'), orderBy('agentCode', 'asc')));
       setAgentMappings(mappingsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -515,6 +607,23 @@ export default function LogisticsPerformance() {
           return filterDT && filterDT >= bounds.from && filterDT <= bounds.to;
         })
       : allOrders;
+
+    // Previous period for trend comparison
+    const prevBounds = getPrevRangeBounds(currentRange);
+    const prevOrdersByAgent = {};
+    if (prevBounds) {
+      allOrders
+        .filter(o => {
+          const filterDT = o.effectiveAssignDT || o.assignDT;
+          return filterDT && filterDT >= prevBounds.from && filterDT <= prevBounds.to;
+        })
+        .forEach(o => {
+          const name = o.agentName || '';
+          if (!name) return;
+          if (!prevOrdersByAgent[name]) prevOrdersByAgent[name] = [];
+          prevOrdersByAgent[name].push(o);
+        });
+    }
 
     const agentMap = {};
     filteredOrders.forEach((o) => {
@@ -549,13 +658,36 @@ export default function LogisticsPerformance() {
       const claimTimes = a.orders
         .map(o => o.claimTimeSec)
         .filter(v => v != null && v >= 0 && v < 86400 && v <= 60000);
-      
+
       const activationTimes = a.orders
         .map(o => o.activationAssignTimeSec)
         .filter(v => v != null && v >= 0 && v <= 60000); // Exclude bad handling (>60000s)
 
+      const assignToAwbTimes = a.orders
+        .map(o => awbMap[o.orderNo])
+        .filter(v => v != null && v >= 0);
+
       const mapping = mappingMap[(a.name || '').toUpperCase()];
       const visible = mapping ? mapping.visible !== false : true;
+
+      const currentAvgClaim = Math.round(avg(claimTimes));
+
+      // Compute previous period avg claim time for trend
+      let trend = 'neutral';
+      let trendPct = 0;
+      if (prevBounds) {
+        const prevOrders = prevOrdersByAgent[a.name] || [];
+        const prevClaimTimes = prevOrders
+          .map(o => o.claimTimeSec)
+          .filter(v => v != null && v >= 0 && v < 86400 && v <= 60000);
+        const prevAvgClaim = Math.round(avg(prevClaimTimes));
+        if (prevAvgClaim > 0 && currentAvgClaim > 0) {
+          const pct = ((currentAvgClaim - prevAvgClaim) / prevAvgClaim) * 100;
+          trendPct = Math.round(pct);
+          if (pct < -3)     trend = 'improving';
+          else if (pct > 3) trend = 'declining';
+        }
+      }
 
       return {
         name: a.name,
@@ -564,16 +696,18 @@ export default function LogisticsPerformance() {
         color,
         total:         a.orders.length,
         claimed,
-        avgClaimTimeSec: Math.round(avg(claimTimes)),
+        avgClaimTimeSec: currentAvgClaim,
         activationAssignTimeSec: Math.round(avg(activationTimes)),
+        avgAssignToAwbSec: Math.round(avg(assignToAwbTimes)),
         badHandlingCount,
         status:        'active',
-        trend:         'neutral',
+        trend,
+        trendPct,
         visible,
         orders:        a.orders, // Pass orders for modal
       };
     }).filter(a => a.total > 0 && a.visible).sort((a, b) => b.total - a.total);
-  }, [loadState, allOrders, agentMappings, currentRange, customDates]);
+  }, [loadState, allOrders, awbMap, agentMappings, currentRange, customDates]);
 
   function handleAgentClick(agent) {
     setSelectedAgent(agent);
@@ -700,6 +834,7 @@ export default function LogisticsPerformance() {
               onPage={setPage}
               slaMinutes={slaSettings?.logistics?.workingHours}
               onAgentClick={handleAgentClick}
+              compLabel={getPrevRangeLabel(currentRange)}
             />
 
             <AgentDetailModal

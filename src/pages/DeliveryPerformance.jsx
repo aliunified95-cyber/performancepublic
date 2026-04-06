@@ -307,7 +307,7 @@ function HeroBadge({ stats, periodLabel }) {
   const {
     created, delivered, undelivered,
     attempt1, attempt2, attempt3plus,
-    avgDeliveryTimeSec, avgAwbToLogisticsSec,
+    avgDeliveryTimeSec, avgAwbToFirstAttemptSec,
   } = stats;
 
   const deliveryRate   = pct(delivered, created);
@@ -318,8 +318,8 @@ function HeroBadge({ stats, periodLabel }) {
 
   const dh = Math.floor(avgDeliveryTimeSec / 3600);
   const dm = Math.floor((avgDeliveryTimeSec % 3600) / 60);
-  const lh = Math.floor(avgAwbToLogisticsSec / 3600);
-  const lm = Math.floor((avgAwbToLogisticsSec % 3600) / 60);
+  const fh = Math.floor(avgAwbToFirstAttemptSec / 3600);
+  const fm = Math.floor((avgAwbToFirstAttemptSec % 3600) / 60);
 
   return (
     <div className="hero-badge">
@@ -379,19 +379,20 @@ function HeroBadge({ stats, periodLabel }) {
           <span className="hero-kpi-badge badge-neu">creation → delivery</span>
         </div>
 
-        {/* Avg AWB to Logistics */}
+        {/* Avg AWB to 1st Attempt */}
         <div className="hero-kpi">
-          <div className="hero-kpi-icon" style={{ background: 'rgba(123,63,160,0.18)' }}>
-            <svg viewBox="0 0 24 24" style={{ stroke: 'var(--amethyst)' }} fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <div className="hero-kpi-icon" style={{ background: 'rgba(0,188,212,0.15)' }}>
+            <svg viewBox="0 0 24 24" style={{ stroke: '#00BCD4' }} fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="12" cy="12" r="10"/>
-              <polyline points="12 6 12 12 8 14"/>
+              <polyline points="12 6 12 12 16 14"/>
+              <circle cx="12" cy="12" r="3" fill="none"/>
             </svg>
           </div>
           <div className="hero-kpi-value">
-            {avgAwbToLogisticsSec > 0 ? <>{lh}<sup>h {String(lm).padStart(2, '0')}m</sup></> : '—'}
+            {avgAwbToFirstAttemptSec > 0 ? <>{fh}<sup>h {String(fm).padStart(2, '0')}m</sup></> : '—'}
           </div>
-          <div className="hero-kpi-label">Avg AWB → Logistics</div>
-          <span className="hero-kpi-badge badge-neu">creation → assignment</span>
+          <div className="hero-kpi-label">Avg AWB → 1st Attempt</div>
+          <span className="hero-kpi-badge" style={{ background: 'rgba(0,188,212,0.12)', color: '#00BCD4' }}>creation → 1st attempt</span>
         </div>
       </div>
 
@@ -442,7 +443,8 @@ function DailyBreakdown({ rows, onRowClick }) {
     { key: 'attempt1',           label: '1st Attempt' },
     { key: 'attempt2',           label: '2nd Attempt' },
     { key: 'attempt3plus',       label: '3rd+ Attempt' },
-    { key: 'avgDeliveryTimeSec', label: 'Avg Delivery Time' },
+    { key: 'avgDeliveryTimeSec',      label: 'Avg Delivery Time' },
+    { key: 'avgAwbToFirstAttemptSec', label: 'Avg AWB → 1st Attempt' },
   ];
 
   return (
@@ -473,7 +475,7 @@ function DailyBreakdown({ rows, onRowClick }) {
           <tbody>
             {sorted.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
+                <td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
                   No daily data available
                 </td>
               </tr>
@@ -525,6 +527,9 @@ function DailyBreakdown({ rows, onRowClick }) {
                     </span>
                   </td>
                   <td className="num-cell">{fmtTime(row.avgDeliveryTimeSec)}</td>
+                  <td className="num-cell" style={{ color: row.avgAwbToFirstAttemptSec > 0 ? '#00BCD4' : 'var(--text-dim)' }}>
+                    {fmtTime(row.avgAwbToFirstAttemptSec)}
+                  </td>
                 </tr>
               );
             })}
@@ -600,9 +605,9 @@ export default function DeliveryPerformance() {
     const attempt1      = filteredShipments.filter(s => s.status === 'delivered' && s.attempt === 1).length;
     const attempt2      = filteredShipments.filter(s => s.status === 'delivered' && s.attempt === 2).length;
     const attempt3plus  = filteredShipments.filter(s => s.status === 'delivered' && s.attempt >= 3).length;
-    const avgDeliveryTimeSec   = Math.round(avg(filteredShipments.filter(s => s.status === 'delivered').map(s => s.deliveryTimeSec)));
-    const avgAwbToLogisticsSec = Math.round(avg(filteredShipments.map(s => s.awbToLogisticsSec).filter(v => v != null)));
-    return { created, delivered, undelivered, attempt1, attempt2, attempt3plus, avgDeliveryTimeSec, avgAwbToLogisticsSec };
+    const avgDeliveryTimeSec      = Math.round(avg(filteredShipments.filter(s => s.status === 'delivered').map(s => s.deliveryTimeSec)));
+    const avgAwbToFirstAttemptSec = Math.round(avg(filteredShipments.map(s => s.awbToFirstAttemptSec).filter(v => v != null)));
+    return { created, delivered, undelivered, attempt1, attempt2, attempt3plus, avgDeliveryTimeSec, avgAwbToFirstAttemptSec };
   }, [filteredShipments]);
 
   // Daily breakdown rows — include raw shipments per day for modal
@@ -613,7 +618,7 @@ export default function DeliveryPerformance() {
       const d = s.shipmentDate;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
       if (!byDate[key]) {
-        byDate[key] = { date: key, created: 0, delivered: 0, undelivered: 0, attempt1: 0, attempt2: 0, attempt3plus: 0, deliveryTimes: [], shipments: [] };
+        byDate[key] = { date: key, created: 0, delivered: 0, undelivered: 0, attempt1: 0, attempt2: 0, attempt3plus: 0, deliveryTimes: [], firstAttemptTimes: [], shipments: [] };
       }
       const row = byDate[key];
       row.created++;
@@ -627,11 +632,13 @@ export default function DeliveryPerformance() {
       } else {
         row.undelivered++;
       }
+      if (s.awbToFirstAttemptSec > 0) row.firstAttemptTimes.push(s.awbToFirstAttemptSec);
     });
     return Object.values(byDate).map(r => ({
       ...r,
-      deliveryRate:      pct(r.delivered, r.created),
-      avgDeliveryTimeSec: Math.round(avg(r.deliveryTimes)),
+      deliveryRate:             pct(r.delivered, r.created),
+      avgDeliveryTimeSec:       Math.round(avg(r.deliveryTimes)),
+      avgAwbToFirstAttemptSec:  Math.round(avg(r.firstAttemptTimes)),
     }));
   }, [filteredShipments]);
 

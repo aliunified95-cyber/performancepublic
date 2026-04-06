@@ -1332,6 +1332,8 @@ export default function Admin() {
   const [expandedEmailStats, setExpandedEmailStats] = useState({});
   const [retrying, setRetrying]             = useState(false);
   const [sendCard, setSendCard]             = useState(null);
+  const [testCard,    setTestCard]          = useState(null);
+  const [testSending, setTestSending]       = useState(false);
   const sendUnsubRef                        = useRef(null);
   const [clearing, setClearing]           = useState(false);
   const [clearProgress, setClearProgress] = useState({ pct: 0, label: '' });
@@ -1478,6 +1480,45 @@ export default function Admin() {
       setSendCard(prev => ({ ...prev, status: 'failed', error: err.message }));
     } finally {
       setRetrying(false);
+    }
+  }
+
+  async function triggerTestEmailSend() {
+    setTestSending(true);
+    const latestImport = history[0];
+    if (!latestImport) {
+      setTestCard({ status: 'failed', error: 'No import found.', queuedAt: new Date() });
+      setTestSending(false);
+      return;
+    }
+    setTestCard({ importId: latestImport.id, queuedAt: new Date(), status: 'sending', error: null, sentAt: null, dateRange: null });
+    try {
+      const token = await auth.currentUser.getIdToken();
+      const resp = await fetch(
+        'https://us-central1-performer-2df35.cloudfunctions.net/sendTestReportsNow',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ importId: latestImport.id }),
+        }
+      );
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${resp.status}`);
+      }
+      const hSnap = await getDocs(
+        query(collection(db, 'emailHistory'),
+          where('importId', '==', latestImport.id),
+          where('isTest',   '==', true),
+          orderBy('sentAt', 'desc'), limit(1))
+      );
+      const h = hSnap.docs[0]?.data() || null;
+      setTestCard(prev => ({ ...prev, status: 'sent', sentAt: new Date(), dateRange: h?.dateRange || null }));
+      await loadEmailHistory();
+    } catch (err) {
+      setTestCard(prev => ({ ...prev, status: 'failed', error: err.message }));
+    } finally {
+      setTestSending(false);
     }
   }
 
@@ -2107,6 +2148,7 @@ export default function Admin() {
         {activeTab === 'emails' && (() => {
           const todayKey = new Date().toISOString().slice(0, 10);
           const hasSentToday = emailHistory.some(e => {
+            if (e.isTest) return false;
             const ts = e.sentAt?.toDate ? e.sentAt.toDate() : new Date(e.sentAt);
             return ts.toISOString().slice(0, 10) === todayKey;
           });
@@ -2162,7 +2204,7 @@ export default function Admin() {
                       </span>
                     )}
                     {sendCard.status === 'sending' && (
-                      <span style={{ fontSize: 12, color: '#f59e0b' }}>Generating PDFs and sending emails…</span>
+                      <span style={{ fontSize: 12, color: '#f59e0b' }}>Rendering live-app PDFs — may take up to 5 min on first run…</span>
                     )}
                   </div>
 
@@ -2232,6 +2274,66 @@ export default function Admin() {
               );
             })()}
 
+            {/* ── TEST REPORTS BUTTON ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+              <button
+                className="btn-secondary"
+                onClick={triggerTestEmailSend}
+                disabled={!hasSentToday || testSending}
+                title={!hasSentToday ? 'Real reports must be sent today first' : 'Send test PDFs to ali.mohsen@bh.zain.com only'}
+                style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                {testSending ? 'Sending Test…' : 'Send Test Reports'}
+              </button>
+              {!hasSentToday && (
+                <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                  Available after today's auto email is sent
+                </span>
+              )}
+            </div>
+
+            {/* ── TEST SEND STATUS CARD ── */}
+            {testCard && (() => {
+              const statusColor  = testCard.status === 'sent' ? '#22c55e' : testCard.status === 'failed' ? '#ef4444' : '#f59e0b';
+              const statusBg     = testCard.status === 'sent' ? 'rgba(34,197,94,0.08)' : testCard.status === 'failed' ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)';
+              const statusBorder = testCard.status === 'sent' ? 'rgba(34,197,94,0.3)'  : testCard.status === 'failed' ? 'rgba(239,68,68,0.3)'  : 'rgba(245,158,11,0.3)';
+              const statusLabel  = testCard.status === 'sent' ? 'Test Sent' : testCard.status === 'failed' ? 'Failed' : 'Sending Test…';
+              return (
+                <div style={{ margin: '0 0 20px 0', borderRadius: '10px', border: `1px solid ${statusBorder}`, background: statusBg, overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderBottom: `1px solid ${statusBorder}` }}>
+                    <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: statusColor, color: '#fff', letterSpacing: '0.04em' }}>{statusLabel}</span>
+                    <span style={{ fontSize: 13, color: 'var(--text-dim)', flex: 1 }}>Test Report Send · ali.mohsen@bh.zain.com only</span>
+                    {testCard.status === 'sending' && (
+                      <span style={{ fontSize: 12, color: '#f59e0b' }}>Rendering live-app PDFs — may take up to 5 min on first run…</span>
+                    )}
+                  </div>
+                  <div style={{ padding: '12px 18px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px 24px' }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Started At</div>
+                      <div style={{ fontSize: 13 }}>{testCard.queuedAt?.toLocaleString('en-GB') || '—'}</div>
+                    </div>
+                    {testCard.sentAt && (
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Sent At</div>
+                        <div style={{ fontSize: 13 }}>{testCard.sentAt.toLocaleString('en-GB')}</div>
+                      </div>
+                    )}
+                    {testCard.dateRange && (
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Data Period</div>
+                        <div style={{ fontSize: 13 }}>{testCard.dateRange}</div>
+                      </div>
+                    )}
+                  </div>
+                  {testCard.status === 'failed' && testCard.error && (
+                    <div style={{ margin: '0 18px 14px', padding: '10px 14px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', fontSize: 13, color: '#ef4444' }}>
+                      {testCard.error}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {emailHistoryLoading ? (
               <div className="section-empty">Loading...</div>
             ) : emailHistory.length === 0 ? (
@@ -2271,8 +2373,8 @@ export default function Admin() {
                     const thresholds = item.slaThresholds || {};
                     const fmtSec = s => s == null ? '—' : `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
                     return (
-                      <>
-                        <tr key={item.id}>
+                      <React.Fragment key={item.id}>
+                        <tr>
                           <td>{ts.toLocaleString('en-GB')}</td>
                           <td>{item.dateRange || '—'}</td>
                           <td>{item.rowCount?.toLocaleString() || '—'}</td>
@@ -2366,7 +2468,7 @@ export default function Admin() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>

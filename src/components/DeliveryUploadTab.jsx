@@ -160,6 +160,11 @@ function transformRow(row, logisticsOrderMap) {
     ? Math.max(0, Math.round((deliveredDate - shipmentDate) / 1000))
     : null;
 
+  // AWB creation → 1st attempt
+  const awbToFirstAttemptSec = (att1Date && shipmentDate)
+    ? Math.max(0, Math.round((att1Date - shipmentDate) / 1000))
+    : null;
+
   // AWB to logistics: look up the Zain order in logisticsOrders by Consignee Reference 1
   let awbToLogisticsSec = null;
   if (awb && logisticsOrderMap && logisticsOrderMap[awb] && shipmentDate) {
@@ -178,6 +183,7 @@ function transformRow(row, logisticsOrderMap) {
     status,
     attempt:          attempt || null,
     deliveryTimeSec,
+    awbToFirstAttemptSec,
     awbToLogisticsSec,
     problemCode:      problemCode || null,
     prob1:            prob1 || null,
