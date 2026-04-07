@@ -1232,10 +1232,15 @@ async function sendAllReports(importId, testRecipient = null) {
     if (m.email) agentEmailMap[code] = m;
   });
 
-  // Only include agents that are visible (visible===true) AND have a display name set
+  // Only include agents that are visible (visible===true) AND have a display name set AND match the agent type
   const isVisible = (agentCode) => {
     const m = mappingMap[(agentCode || '').toUpperCase()];
     return !!(m && m.displayName && m.visible !== false);
+  };
+  
+  const isAgentType = (agentCode, type) => {
+    const m = mappingMap[(agentCode || '').toUpperCase()];
+    return m && m.agentType === type;
   };
 
   const slaData = slaSnap.empty ? {} : slaSnap.docs[0].data();
@@ -1243,15 +1248,15 @@ async function sendAllReports(importId, testRecipient = null) {
   const slaLogisticsSec = ((slaData.logistics  || {}).workingHours || 120) * 60;
   const slaActSec       = ((slaData.activation || {}).workingHours || 120) * 60;
 
-  // Build stats then filter to visible-only agents; add displayName for email output
+  // Build stats then filter to visible-only agents of the correct type; add displayName for email output
   // Keep original agent code in `name` so SLA alert email lookups still work
-  const applyMapping = (stats) => stats
-    .filter(a => isVisible(a.name))
+  const applyMapping = (stats, agentType) => stats
+    .filter(a => isVisible(a.name) && isAgentType(a.name, agentType))
     .map(a => ({ ...a, displayName: mappingMap[a.name.toUpperCase()]?.displayName || a.name }));
 
-  const salesStats = applyMapping(statsFromDocs(salesSnap.docs,  'claimTimeSec'));
-  const logStats   = applyMapping(statsFromDocs(logSnap.docs,    'claimTimeSec'));
-  const actStats   = applyMapping(statsFromDocs(actSnap.docs,    'handleTimeSec'));
+  const salesStats = applyMapping(statsFromDocs(salesSnap.docs,  'claimTimeSec'), 'sales');
+  const logStats   = applyMapping(statsFromDocs(logSnap.docs,    'claimTimeSec'), 'logistics');
+  const actStats   = applyMapping(statsFromDocs(actSnap.docs,    'handleTimeSec'), 'activation');
 
   const salesAvgTime = safeAvg(salesStats.map(a => a.avgTime).filter(Boolean));
   const salesAvgHandleTime = safeAvg(salesStats.map(a => a.avgHandleTime).filter(Boolean));
