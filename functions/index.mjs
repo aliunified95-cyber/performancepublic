@@ -198,7 +198,11 @@ function getRowAgentName(row) {
 
 function extractAllAgentsFromRow(row) {
   const agents = [];
-  const salesAgent = (row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim();
+  // Portal orders (manually created) use LOG_USER as the creator, not SALES_USER_FIRST
+  const isPortal = (row['CHANNEL'] || '').trim().toLowerCase() === 'portal';
+  const salesAgent = isPortal
+    ? (row['LOG_USER'] || row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim()
+    : (row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim();
   if (salesAgent) agents.push({ agentCode: salesAgent, agentType: 'sales' });
   const logisticsAgent = (row['LOGISTICS_USER_FIRST'] || row['LOGISTICS_USER_LAST'] || '').trim();
   if (logisticsAgent) agents.push({ agentCode: logisticsAgent, agentType: 'logistics' });
@@ -342,7 +346,7 @@ function statsFromDocs(docs, timeField) {
     const data = d.data();
     const agent = data.agentName || '';
     if (!agent) return;
-    if (!map[agent]) map[agent] = { orders: 0, claimed: 0, times: [], badCount: 0 };
+    if (!map[agent]) map[agent] = { orders: 0, claimed: 0, times: [], badCount: 0, assignTimes: [] };
     map[agent].orders++;
     if (data.claimed) {
       map[agent].claimed++;
@@ -350,6 +354,11 @@ function statsFromDocs(docs, timeField) {
       if (t != null && t >= 0) {
         if (t >= BAD_HANDLING_SEC) map[agent].badCount++;
         else map[agent].times.push(t);
+      }
+      // Also track assign time (handle time) for sales
+      const assignT = data.assignTimeSec || data.logisticsAssignTimeSec;
+      if (assignT != null && assignT >= 0 && assignT < BAD_HANDLING_SEC) {
+        map[agent].assignTimes.push(assignT);
       }
     }
   });
@@ -359,6 +368,7 @@ function statsFromDocs(docs, timeField) {
     claimed:     d.claimed,
     rate:        d.orders ? Math.round(d.claimed / d.orders * 100) : 0,
     avgTime:     safeAvg(d.times),
+    avgHandleTime: safeAvg(d.assignTimes),
     badHandling: d.badCount,
   })).sort((a, b) => b.orders - a.orders);
 }
@@ -871,9 +881,10 @@ function buildReportEmailHtml({ dept, color, dateRange, generatedAt, kpis, secti
 </body></html>`;
 }
 
-function buildSalesEmailBody({ stats, totalOrders, totalClaimed, avgTime, slaSeconds, dateRange, generatedAt }) {
+function buildSalesEmailBody({ stats, totalOrders, totalClaimed, avgTime, avgHandleTime, slaSeconds, handleSlaSeconds, dateRange, generatedAt }) {
   const rate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
   const isSlaExceeded = avgTime > slaSeconds;
+  const isHandleSlaExceeded = avgHandleTime > (handleSlaSeconds || slaSeconds);
   return buildReportEmailHtml({
     dept: 'Sales', color: '#1D9E75', dateRange, generatedAt,
     kpis: [
@@ -881,18 +892,23 @@ function buildSalesEmailBody({ stats, totalOrders, totalClaimed, avgTime, slaSec
       { label: 'Claimed',        value: totalClaimed.toLocaleString(), badge: `${rate}%` },
       { label: 'Claim Rate',     value: `${rate}%` },
       { label: 'Avg Claim Time', value: fmtTime(avgTime), exceeded: isSlaExceeded, badge: isSlaExceeded ? 'SLA Exceeded' : 'On Track' },
+      { label: 'Avg Handle Time', value: fmtTime(avgHandleTime), exceeded: isHandleSlaExceeded, badge: isHandleSlaExceeded ? 'SLA Exceeded' : 'On Track' },
       { label: 'Agents',         value: String(stats.length), badge: 'active' },
     ],
-    sections: [{ headers: ['Agent','Orders','Claimed','Claim Rate','Avg Claim Time','Bad Handling','Trend'],
-      rows: stats.map(a => ({ cells: [
-        { v: a.displayName || a.name, agentId: a.name },
-        { v: a.orders.toLocaleString() },
-        { v: a.claimed.toLocaleString() },
-        { v: `${a.rate}%` },
-        { v: fmtTime(a.avgTime), red: a.avgTime != null && a.avgTime > slaSeconds },
-        { v: a.badHandling > 0 ? String(a.badHandling) : '—' },
-        { v: '→' },
-      ]})) }],
+    sections: [{ headers: ['Agent','Orders','Claimed','Claim Rate','Avg Claim Time','Avg Handle Time','Bad Handling','Trend'],
+      rows: stats.map(a => {
+        const handleTimeExceeded = a.avgHandleTime != null && a.avgHandleTime > (handleSlaSeconds || slaSeconds);
+        return { cells: [
+          { v: a.displayName || a.name, agentId: a.name },
+          { v: a.orders.toLocaleString() },
+          { v: a.claimed.toLocaleString() },
+          { v: `${a.rate}%` },
+          { v: fmtTime(a.avgTime), red: a.avgTime != null && a.avgTime > slaSeconds },
+          { v: fmtTime(a.avgHandleTime), red: handleTimeExceeded },
+          { v: a.badHandling > 0 ? String(a.badHandling) : '—' },
+          { v: '→' },
+        ]};
+      }) }],
   });
 }
 
@@ -1089,6 +1105,8 @@ function buildAgentSlaAlertHtml({ agentName, department, dateRange, avgTime, sla
 async function sendAllReports(importId, testRecipient = null) {
   if (!GMAIL_USER || !GMAIL_PASS) return;
 
+  const todayKey = new Date().toISOString().slice(0, 10);
+
   // Check global auto-email toggle (skipped for manual test sends)
   if (!testRecipient) {
     const emailSettingsSnap = await db.collection('emailSettings').doc('default').get();
@@ -1097,6 +1115,14 @@ async function sendAllReports(importId, testRecipient = null) {
       : true; // default enabled if doc not yet created
     if (!autoEmailEnabled) {
       console.log('[email] Auto email is disabled — skipping send.');
+      return;
+    }
+
+    // Guard: Check if emails were already sent today (prevents duplicates)
+    const pendingRef = db.collection('pendingReports').doc(todayKey);
+    const pendingDoc = await pendingRef.get();
+    if (pendingDoc.exists && pendingDoc.data().sent === true) {
+      console.log(`[email] Emails were already sent today (${todayKey}) — skipping duplicate send.`);
       return;
     }
   }
@@ -1161,6 +1187,7 @@ async function sendAllReports(importId, testRecipient = null) {
   const actStats   = applyMapping(statsFromDocs(actSnap.docs,    'handleTimeSec'));
 
   const salesAvgTime = safeAvg(salesStats.map(a => a.avgTime).filter(Boolean));
+  const salesAvgHandleTime = safeAvg(salesStats.map(a => a.avgHandleTime).filter(Boolean));
   const logAvgTime   = safeAvg(logStats.map(a => a.avgTime).filter(Boolean));
   const actAvgTime   = safeAvg(actStats.map(a => a.avgTime).filter(Boolean));
 
@@ -1172,7 +1199,7 @@ async function sendAllReports(importId, testRecipient = null) {
 
   // ── Build HTML email bodies for each department
   const generatedAt    = new Date().toLocaleString('en-GB');
-  const salesHtml      = buildSalesEmailBody({ stats: salesStats, totalOrders, totalClaimed, avgTime: salesAvgTime, slaSeconds: slaSalesSec, dateRange, generatedAt });
+  const salesHtml      = buildSalesEmailBody({ stats: salesStats, totalOrders, totalClaimed, avgTime: salesAvgTime, avgHandleTime: salesAvgHandleTime, slaSeconds: slaSalesSec, handleSlaSeconds: slaSalesSec, dateRange, generatedAt });
   const logisticsHtml  = buildLogisticsEmailBody({ stats: logStats,   avgTime: logAvgTime,   slaSeconds: slaLogisticsSec, dateRange, generatedAt });
   const activationHtml = buildActivationEmailBody({ stats: actStats,  avgTime: actAvgTime,   slaSeconds: slaActSec,       dateRange, generatedAt });
   const managementHtml = buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt });
@@ -1363,7 +1390,7 @@ async function runImport(csvText, filename, csvText2 = null, filename2 = null) {
   }
 
   const rows = [...rows1, ...rows2];
-  const portalCount = rows.filter(r => (r['CHANNEL'] || '').trim() === 'Portal').length;
+  const portalCount = rows.filter(r => (r['CHANNEL'] || '').trim().toLowerCase() === 'portal').length;
 
   const agents = processRows(rows);
   const summary = computeSummary(agents, rows);
@@ -1403,7 +1430,7 @@ async function runImport(csvText, filename, csvText2 = null, filename2 = null) {
     const effectiveOrderDT = getEffectiveSalesStartTime(orderDT, row['HOURS_TYPE']);
 
     // For portal (manually created) orders, the creator is in LOG_USER not SALES_USER_FIRST
-    const isPortal = (row['CHANNEL'] || '').trim() === 'Portal';
+    const isPortal = (row['CHANNEL'] || '').trim().toLowerCase() === 'portal';
     // Portal orders may not have ORDER_CREATION_DATE; fall back to logistics assign date
     // so they are not excluded by date range filters in the dashboards.
     const storedOrderDT = orderDT || (isPortal ? (logisticsAssignDT || activationAssignDT) : null);
@@ -1638,14 +1665,24 @@ export const autoImportCsv = onRequest(
       const result = await runImport(csvText, filename, csvText2, filename2);
 
       // Immediately send reports after import — don't wait for the scheduled function
-      try {
-        await sendAllReports(result.importId);
-        const dateKey    = new Date().toISOString().slice(0, 10);
-        const pendingRef = db.collection('pendingReports').doc(dateKey);
-        await pendingRef.set({ sent: true, sentAt: FieldValue.serverTimestamp() }, { merge: true });
-      } catch (emailErr) {
-        console.error('Auto-import: failed to send reports:', emailErr);
-        result.emailError = emailErr.message;
+      // Guard: only send if emails haven't been sent today already
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const pendingRef = db.collection('pendingReports').doc(todayKey);
+      const pendingDoc = await pendingRef.get();
+      const alreadySentToday = pendingDoc.exists && pendingDoc.data().sent === true;
+      
+      if (!alreadySentToday) {
+        try {
+          await sendAllReports(result.importId);
+          await pendingRef.set({ sent: true, sentAt: FieldValue.serverTimestamp() }, { merge: true });
+        } catch (emailErr) {
+          console.error('Auto-import: failed to send reports:', emailErr);
+          result.emailError = emailErr.message;
+        }
+      } else {
+        console.log(`[autoImportCsv] Emails were already sent today (${todayKey}) — skipping send.`);
+        result.emailSkipped = true;
+        result.emailSkippedReason = 'Emails were already sent today';
       }
 
       res.status(200).json({ success: true, result });

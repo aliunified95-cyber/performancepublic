@@ -252,7 +252,7 @@ function extractAllAgentsFromRow(row) {
   const agents = [];
 
   // Sales agents — for portal (manually created) orders, creator is in LOG_USER
-  const isPortal = (row['CHANNEL'] || '').trim() === 'Portal';
+  const isPortal = (row['CHANNEL'] || '').trim().toLowerCase() === 'portal';
   const salesAgent = isPortal
     ? (row['LOG_USER'] || row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim()
     : (row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim();
@@ -1927,6 +1927,9 @@ export default function Admin() {
       };
 
       // Row processors for each collection
+      let portalOrderCountDebug = 0;
+      let bf01171OrderCountDebug = 0;
+      
       const processSalesOrder = (row) => {
         const orderNo = (row['CHANNEL_ORDER_NO'] || '').trim();
         if (!orderNo) return null;
@@ -1940,10 +1943,28 @@ export default function Admin() {
         const effectiveOrderDT = getEffectiveSalesStartTime(orderDT, row['HOURS_TYPE']);
 
         // For portal (manually created) orders, the creator is in LOG_USER not SALES_USER_FIRST
-        const isPortal = (row['CHANNEL'] || '').trim() === 'Portal';
+        const isPortal = (row['CHANNEL'] || '').trim().toLowerCase() === 'portal';
+        
+        // Debug logging
+        if (isPortal) portalOrderCountDebug++;
+        const logUser = (row['LOG_USER'] || '').trim();
+        const salesUser = (row['SALES_USER_FIRST'] || '').trim();
+        if (logUser === 'BF01171' || salesUser === 'BF01171') {
+          bf01171OrderCountDebug++;
+          console.log('Processing BF01171 order:', orderNo, 'isPortal:', isPortal, 'channel:', row['CHANNEL'], 'LOG_USER:', logUser, 'SALES_USER_FIRST:', salesUser);
+        }
+        
         // Portal orders may not have ORDER_CREATION_DATE; fall back to logistics assign date
         // so they are not excluded by date range filters in the dashboards.
-        const storedOrderDT = orderDT || (isPortal ? (logisticsAssignDT || activationAssignDT) : null);
+        // If still no date, use current time as last resort so portal orders appear in dashboard.
+        const now = new Date();
+        const storedOrderDT = orderDT || (isPortal ? (logisticsAssignDT || activationAssignDT || now) : null);
+        
+        const agentName = isPortal ? (logUser || getRowAgentName(row)) : getRowAgentName(row);
+        if (agentName === 'BF01171') {
+          console.log('BF01171 sales order saved:', orderNo, 'channel:', row['CHANNEL'], 'isPortal:', isPortal, 'agentName:', agentName);
+        }
+        
         return {
           orderNo,
           agentName:    isPortal ? (row['LOG_USER'] || '').trim() || getRowAgentName(row) : getRowAgentName(row),
@@ -1977,7 +1998,10 @@ export default function Admin() {
         const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
         const activationClaimDT = parseDateTime(row['ACTIVATION_CLAIM_DATE'], row['ACTIVATION_CLAIM_TIME']);
         
-        const effectiveAssignDT = getEffectiveStartTime(assignDT, 'logistics');
+        // For portal orders without logistics assign date, fall back to activation assign date or now
+        const isPortal = (row['CHANNEL'] || '').trim().toLowerCase() === 'portal';
+        const storedAssignDT = assignDT || (isPortal ? (activationAssignDT || new Date()) : null);
+        const effectiveAssignDT = getEffectiveStartTime(storedAssignDT, 'logistics');
         
         return {
           orderNo,
@@ -2030,6 +2054,9 @@ export default function Admin() {
       // Process sequentially to reduce memory pressure and Firestore load
       setImportProgress({ pct: 20, label: 'Writing Sales Orders…', show: true });
       const salesCount = await processInChunks('orders', processSalesOrder, totalRows, 'Sales Orders');
+      
+      console.log('Import Debug - Total portal orders processed:', portalOrderCountDebug);
+      console.log('Import Debug - Total BF01171 orders processed:', bf01171OrderCountDebug);
       
       setImportProgress({ pct: 50, label: 'Writing Logistics Orders…', show: true });
       const logisticsCount = await processInChunks('logisticsOrders', processLogisticsOrder, totalRows, 'Logistics Orders');

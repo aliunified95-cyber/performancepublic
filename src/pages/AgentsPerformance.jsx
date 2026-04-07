@@ -617,9 +617,22 @@ export default function AgentsPerformance() {
       const initials = a.name.split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase();
       const color    = COLORS[idx % COLORS.length];
 
+      // Debug logging for BF01171
+      if (a.name === 'BF01171') {
+        console.log('BF01171 orders:', a.orders.length);
+        console.log('BF01171 order channels:', a.orders.map(o => ({ channel: o.channel, orderNo: o.orderNo })));
+      }
+
       // Split portal (manually created) orders from regular orders
-      const portalOrders  = a.orders.filter(o => (o.channel || '') === 'Portal');
-      const regularOrders = a.orders.filter(o => (o.channel || '') !== 'Portal');
+      // Use case-insensitive comparison and trim whitespace for robust matching
+      const portalOrders  = a.orders.filter(o => (o.channel || '').trim().toLowerCase() === 'portal');
+      const regularOrders = a.orders.filter(o => (o.channel || '').trim().toLowerCase() !== 'portal');
+
+      // Debug logging
+      if (a.name === 'BF01171') {
+        console.log('BF01171 portalOrders:', portalOrders.length);
+        console.log('BF01171 regularOrders:', regularOrders.length);
+      }
 
       // KPIs only count regular (non-portal) orders
       const claimed  = regularOrders.filter(o => o.claimed).length;
@@ -649,7 +662,7 @@ export default function AgentsPerformance() {
       if (prevBounds) {
         const prevOrders = prevOrdersByAgent[a.name] || [];
         const prevClaimTimes = prevOrders
-          .filter(o => (o.channel || '') !== 'Portal')
+          .filter(o => (o.channel || '').trim().toLowerCase() !== 'portal')
           .map(o => o.claimTimeSec)
           .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
         const prevAvgClaim = Math.round(avg(prevClaimTimes));
@@ -670,7 +683,7 @@ export default function AgentsPerformance() {
         role:          mapping?.displayName || a.name,
         initials,
         color,
-        total:         regularOrders.length,   // non-portal only
+        total:         a.orders.length,        // ALL orders (including portal)
         claimed,
         portalCount:   portalOrders.length,    // manually created orders
         claimTimeSec:  currentAvgClaim,
