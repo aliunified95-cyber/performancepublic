@@ -779,7 +779,7 @@ async function buildPDF(params) {
 }
 
 // ─── EMAIL SENDER ─────────────────────────────────────────────────────────────
-async function sendReport({ to, subject, html, pdfBuffer, filename }) {
+async function sendReport({ to, subject, html }) {
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: { user: GMAIL_USER, pass: GMAIL_PASS },
@@ -789,7 +789,207 @@ async function sendReport({ to, subject, html, pdfBuffer, filename }) {
     to:   Array.isArray(to) ? to.join(', ') : to,
     subject,
     html,
-    attachments: [{ filename, content: pdfBuffer, contentType: 'application/pdf' }],
+  });
+}
+
+// ─── HTML REPORT EMAIL BUILDERS ───────────────────────────────────────────────
+// Dark-themed email matching the dashboard palette (#0D1F1A, #132B22, #1D9E75)
+function buildReportEmailHtml({ dept, color, dateRange, generatedAt, kpis, sections }) {
+  // KPI cards as tiles (dark surface, muted label on top, large white value below)
+  const kpiHtml = kpis.map(k => {
+    const isExceeded = k.exceeded;
+    const badgeHtml = k.badge ? 
+      `<div style="display:inline-block;margin-top:6px;font-size:10px;font-weight:600;color:${isExceeded ? '#fff' : '#1D9E75'};background:${isExceeded ? '#dc2626' : 'rgba(29,158,117,0.15)'};padding:3px 10px;border-radius:20px">${k.badge}</div>` : '';
+    return `
+    <td width="${Math.floor(100 / kpis.length)}%" style="padding:0 6px 0 0;vertical-align:top">
+      <div style="background:#132B22;border:1px solid rgba(29,158,117,0.2);border-radius:10px;padding:16px 12px;text-align:center">
+        <div style="font-size:10px;color:#6b9a8a;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em">${k.label}</div>
+        <div style="font-size:24px;font-weight:700;color:#ffffff;line-height:1.1">${k.value}</div>
+        ${badgeHtml}
+      </div>
+    </td>`;
+  }).join('');
+
+  const sectionsHtml = sections.map(sec => {
+    const thead = sec.headers.map((h, i) =>
+      `<th style="background:#132B22;color:#1D9E75;padding:12px ${i===0?'16px':'12px'};text-align:${i===0?'left':'right'};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;border-bottom:2px solid #1D9E75">${h}</th>`
+    ).join('');
+
+    const tbody = sec.rows.map((row, idx) => {
+      if (row.sep) return `<tr><td colspan="${sec.headers.length}" style="padding:10px 16px;background:#0D1F1A;color:#1D9E75;font-size:11px;font-weight:700;letter-spacing:0.08em;border-bottom:1px solid #1D9E75">${row.sep}</td></tr>`;
+      const bg = idx % 2 === 1 ? '#0D1F1A' : '#132B22';
+      return `<tr>${row.cells.map((c, ci) => {
+        const isBadHandling = sec.headers[ci] === 'Bad Handling' && c.v !== '—' && parseInt(c.v) > 0;
+        const textColor = isBadHandling ? '#f97316' : (c.red ? '#dc2626' : (ci === 0 ? '#ffffff' : '#d1e0d9'));
+        const align = ci === 0 ? 'left' : 'right';
+        const fontSize = ci === 0 ? '13px' : '12px';
+        const fontWeight = (ci===0||c.bold||isBadHandling) ? '600' : '400';
+        const agentIdSub = ci === 0 && c.agentId ? `<div style="font-size:10px;color:#6b9a8a;margin-top:2px">${c.agentId}</div>` : '';
+        return `<td style="padding:10px ${ci===0?'16px':'12px'};background:${bg};font-size:${fontSize};color:${textColor};font-weight:${fontWeight};border-bottom:1px solid rgba(29,158,117,0.1);text-align:${align};white-space:nowrap">${c.v}${agentIdSub}</td>`;
+      }).join('')}</tr>`;
+    }).join('');
+
+    return `
+      ${sec.title ? `<div style="font-size:12px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.08em;margin:0 0 12px;padding-bottom:8px;border-bottom:2px solid ${color}">${sec.title}</div>` : ''}
+      <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid rgba(29,158,117,0.2);border-radius:10px;overflow:hidden;margin-bottom:20px">
+        <thead><tr>${thead}</tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${dept} Performance Report</title></head>
+<body style="margin:0;padding:0;background:#0D1F1A;font-family:'Segoe UI',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#0D1F1A">
+<tr><td align="center" style="padding:24px 12px">
+<table width="680" cellpadding="0" cellspacing="0" style="max-width:680px;background:#132B22;border-radius:16px;overflow:hidden;border:1px solid rgba(29,158,117,0.25)">
+  <tr><td style="background:#0D1F1A;padding:28px 32px;border-left:4px solid ${color}">
+    <div style="font-size:24px;font-weight:700;color:#ffffff;letter-spacing:-0.3px">${dept} Performance Report</div>
+    <div style="font-size:12px;color:#6b9a8a;margin-top:8px">
+      Generated: ${generatedAt} &nbsp;&bull;&nbsp; Period: <strong style="color:#1D9E75">${dateRange}</strong>
+    </div>
+  </td></tr>
+  <tr><td style="height:2px;background:linear-gradient(90deg,${color} 0%,transparent 100%)"></td></tr>
+  <tr><td style="padding:28px 32px 20px">
+    <div style="font-size:11px;font-weight:700;color:#1D9E75;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid rgba(29,158,117,0.3)">&#9679; Team Overview</div>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>${kpiHtml}</tr></table>
+  </td></tr>
+  <tr><td style="padding:4px 32px 32px">
+    <div style="font-size:11px;font-weight:700;color:#1D9E75;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid rgba(29,158,117,0.3)">&#9679; Agent Breakdown &nbsp;<span style="font-weight:400;color:#6b9a8a;font-size:10px">${dateRange}</span></div>
+    ${sectionsHtml}
+  </td></tr>
+  <tr><td style="padding:16px 32px;background:#0D1F1A;border-top:1px solid rgba(29,158,117,0.2)">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td style="font-size:10px;color:#6b9a8a">Team Performance System</td>
+      <td align="center" style="font-size:10px;color:#6b9a8a">${dateRange}</td>
+      <td align="right" style="font-size:10px;color:#6b9a8a">Automated report developed by Ali Isa Mohsen 36030791</td>
+    </tr></table>
+  </td></tr>
+</table>
+</td></tr></table>
+</body></html>`;
+}
+
+function buildSalesEmailBody({ stats, totalOrders, totalClaimed, avgTime, slaSeconds, dateRange, generatedAt }) {
+  const rate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
+  const isSlaExceeded = avgTime > slaSeconds;
+  return buildReportEmailHtml({
+    dept: 'Sales', color: '#1D9E75', dateRange, generatedAt,
+    kpis: [
+      { label: 'Total Orders',   value: totalOrders.toLocaleString() },
+      { label: 'Claimed',        value: totalClaimed.toLocaleString(), badge: `${rate}%` },
+      { label: 'Claim Rate',     value: `${rate}%` },
+      { label: 'Avg Claim Time', value: fmtTime(avgTime), exceeded: isSlaExceeded, badge: isSlaExceeded ? 'SLA Exceeded' : 'On Track' },
+      { label: 'Agents',         value: String(stats.length), badge: 'active' },
+    ],
+    sections: [{ headers: ['Agent','Orders','Claimed','Claim Rate','Avg Claim Time','Bad Handling','Trend'],
+      rows: stats.map(a => ({ cells: [
+        { v: a.displayName || a.name, agentId: a.name },
+        { v: a.orders.toLocaleString() },
+        { v: a.claimed.toLocaleString() },
+        { v: `${a.rate}%` },
+        { v: fmtTime(a.avgTime), red: a.avgTime != null && a.avgTime > slaSeconds },
+        { v: a.badHandling > 0 ? String(a.badHandling) : '—' },
+        { v: '→' },
+      ]})) }],
+  });
+}
+
+function buildLogisticsEmailBody({ stats, avgTime, slaSeconds, dateRange, generatedAt }) {
+  const total   = stats.reduce((s, a) => s + a.orders,  0);
+  const claimed = stats.reduce((s, a) => s + a.claimed, 0);
+  const rate    = total ? Math.round(claimed / total * 100) : 0;
+  const isSlaExceeded = avgTime > slaSeconds;
+  return buildReportEmailHtml({
+    dept: 'Logistics', color: '#3b82f6', dateRange, generatedAt,
+    kpis: [
+      { label: 'Total Assigned', value: total.toLocaleString() },
+      { label: 'Claimed',        value: claimed.toLocaleString(), badge: `${rate}%` },
+      { label: 'Claim Rate',     value: `${rate}%` },
+      { label: 'Avg Claim Time', value: fmtTime(avgTime), exceeded: isSlaExceeded, badge: isSlaExceeded ? 'SLA Exceeded' : 'On Track' },
+      { label: 'Agents',         value: String(stats.length), badge: 'active' },
+    ],
+    sections: [{ headers: ['Agent','Assigned','Claimed','Claim Rate','Avg Claim Time','Bad Handling','Trend'],
+      rows: stats.map(a => ({ cells: [
+        { v: a.displayName || a.name, agentId: a.name },
+        { v: a.orders.toLocaleString() },
+        { v: a.claimed.toLocaleString() },
+        { v: `${a.rate}%` },
+        { v: fmtTime(a.avgTime), red: a.avgTime != null && a.avgTime > slaSeconds },
+        { v: a.badHandling > 0 ? String(a.badHandling) : '—' },
+        { v: '→' },
+      ]})) }],
+  });
+}
+
+function buildActivationEmailBody({ stats, avgTime, slaSeconds, dateRange, generatedAt }) {
+  const total     = stats.reduce((s, a) => s + a.orders,  0);
+  const completed = stats.reduce((s, a) => s + a.claimed, 0);
+  const rate      = total ? Math.round(completed / total * 100) : 0;
+  const isSlaExceeded = avgTime > slaSeconds;
+  return buildReportEmailHtml({
+    dept: 'Activation', color: '#a855f7', dateRange, generatedAt,
+    kpis: [
+      { label: 'Total Assigned',  value: total.toLocaleString() },
+      { label: 'Completed',       value: completed.toLocaleString(), badge: `${rate}%` },
+      { label: 'Completion Rate', value: `${rate}%` },
+      { label: 'Avg Handle Time', value: fmtTime(avgTime), exceeded: isSlaExceeded, badge: isSlaExceeded ? 'SLA Exceeded' : 'On Track' },
+      { label: 'Agents',          value: String(stats.length), badge: 'active' },
+    ],
+    sections: [{ headers: ['Agent','Assigned','Completed','Completion Rate','Avg Handle Time','Bad Handling','Trend'],
+      rows: stats.map(a => ({ cells: [
+        { v: a.displayName || a.name, agentId: a.name },
+        { v: a.orders.toLocaleString() },
+        { v: a.claimed.toLocaleString() },
+        { v: `${a.rate}%` },
+        { v: fmtTime(a.avgTime), red: a.avgTime != null && a.avgTime > slaSeconds },
+        { v: a.badHandling > 0 ? String(a.badHandling) : '—' },
+        { v: '→' },
+      ]})) }],
+  });
+}
+
+function buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt }) {
+  const salesRate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
+  const top5 = arr => arr.slice(0, 5);
+  
+  // Mini-table rows for each department
+  const salesMiniRows = top5(salesStats).map(a => ({ cells: [
+    { v: a.displayName || a.name, agentId: a.name },
+    { v: `${a.orders} orders` },
+    { v: `${a.rate}%` },
+    { v: '→' },
+  ]}));
+  
+  const logMiniRows = top5(logStats).map(a => ({ cells: [
+    { v: a.displayName || a.name, agentId: a.name },
+    { v: `${a.orders} assigned` },
+    { v: `${a.rate}%` },
+    { v: '→' },
+  ]}));
+  
+  const actMiniRows = top5(actStats).map(a => ({ cells: [
+    { v: a.displayName || a.name, agentId: a.name },
+    { v: `${a.orders} assigned` },
+    { v: `${a.rate}%` },
+    { v: '→' },
+  ]}));
+  
+  return buildReportEmailHtml({
+    dept: 'Management Summary', color: '#f59e0b', dateRange, generatedAt,
+    kpis: [
+      { label: 'Total Orders',     value: totalOrders.toLocaleString() },
+      { label: 'Sales Claim Rate', value: `${salesRate}%` },
+      { label: 'Avg Sales Claim',  value: fmtTime(salesAvgTime), exceeded: salesAvgTime > slaSalesSec, badge: salesAvgTime > slaSalesSec ? 'SLA!' : '' },
+      { label: 'Avg Log Claim',    value: fmtTime(logAvgTime),   badge: logAvgTime > slaLogisticsSec ? 'SLA!' : '' },
+      { label: 'Avg Act Handle',   value: fmtTime(actAvgTime),   exceeded: actAvgTime > slaActSec, badge: actAvgTime > slaActSec ? 'SLA!' : '' },
+    ],
+    sections: [
+      { title: 'Sales', headers: ['Agent','Key Metric','Rate','Trend'], rows: salesMiniRows },
+      { title: 'Logistics', headers: ['Agent','Key Metric','Rate','Trend'], rows: logMiniRows },
+      { title: 'Activation', headers: ['Agent','Key Metric','Rate','Trend'], rows: actMiniRows },
+    ],
   });
 }
 
@@ -814,58 +1014,92 @@ function buildAgentSlaAlertHtml({ agentName, department, dateRange, avgTime, sla
   const avgFmt = fmtTime(avgTime);
   const slaFmt = fmtTime(slaSeconds);
   const deptLabel = department.charAt(0).toUpperCase() + department.slice(1);
-  return `
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:#dc2626;padding:24px 32px;border-radius:8px 8px 0 0">
-        <h2 style="color:white;margin:0">SLA Breach Notification</h2>
-        <p style="color:#fecaca;margin:6px 0 0">${deptLabel} · ${dateRange}</p>
+  const deptColor = department === 'sales' ? '#1D9E75' : department === 'logistics' ? '#3b82f6' : '#a855f7';
+  
+  // Compact KPI tiles
+  const kpiTiles = [
+    { label: ordersLabel, value: orders },
+    { label: claimedLabel, value: claimed },
+    { label: 'Rate', value: `${rate}%` },
+    { label: 'Bad Handling', value: badHandling, warn: badHandling > 0 },
+  ].map(k => `
+    <td width="25%" style="padding:0 4px 0 0">
+      <div style="background:#132B22;border:1px solid rgba(163,45,45,0.3);border-radius:8px;padding:12px 8px;text-align:center">
+        <div style="font-size:9px;color:#6b9a8a;margin-bottom:3px;text-transform:uppercase;letter-spacing:0.05em">${k.label}</div>
+        <div style="font-size:18px;font-weight:700;color:${k.warn ? '#f97316' : '#ffffff'}">${k.value}</div>
       </div>
-      <div style="background:#f8fafc;padding:24px 32px;border:1px solid #e2e8f0;border-top:none">
-        <p style="color:#334155">Dear <strong>${agentName}</strong>,</p>
-        <p style="color:#334155">This is an automated notification to inform you that your average handling time for the period <strong>${dateRange}</strong> has exceeded the accepted SLA threshold.</p>
-        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px 20px;margin:20px 0">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <span style="color:#991b1b;font-weight:600">Your Avg Time</span>
-            <span style="color:#dc2626;font-weight:700;font-size:20px">${avgFmt}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="color:#991b1b;font-weight:600">Accepted SLA</span>
-            <span style="color:#166534;font-weight:700;font-size:20px">${slaFmt}</span>
-          </div>
+    </td>
+  `).join('');
+  
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SLA Alert – ${agentName}</title></head>
+<body style="margin:0;padding:0;background:#0D1F1A;font-family:'Segoe UI',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#0D1F1A">
+<tr><td align="center" style="padding:24px 12px">
+<table width="680" cellpadding="0" cellspacing="0" style="max-width:680px;background:#132B22;border-radius:16px;overflow:hidden;border:1px solid rgba(163,45,45,0.4)">
+  
+  <!-- Red Warning Banner -->
+  <tr><td style="background:#A32D2D;padding:28px 32px">
+    <div style="font-size:22px;font-weight:700;color:#ffffff;letter-spacing:-0.3px">SLA Breach Notification</div>
+    <div style="font-size:12px;color:#fecaca;margin-top:6px">${deptLabel} · ${dateRange}</div>
+  </td></tr>
+  
+  <tr><td style="padding:28px 32px">
+    <!-- Greeting -->
+    <p style="color:#ffffff;font-size:16px;margin:0 0 12px">Dear <strong>${agentName}</strong>,</p>
+    <p style="color:#6b9a8a;font-size:14px;line-height:1.6;margin:0 0 24px">This is an automated notification to inform you that your average handling time for the period <strong style="color:#1D9E75">${dateRange}</strong> has exceeded the accepted SLA threshold.</p>
+    
+    <!-- Two-column comparison card -->
+    <div style="background:#0D1F1A;border:1px solid rgba(163,45,45,0.4);border-radius:12px;padding:20px 24px;margin-bottom:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid rgba(163,45,45,0.3)">
+        <div>
+          <div style="font-size:11px;color:#dc2626;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Your Avg Time</div>
+          <div style="font-size:28px;font-weight:700;color:#dc2626">${avgFmt}</div>
         </div>
-        <p style="color:#334155;font-weight:600;margin-bottom:8px">Performance Breakdown – ${dateRange}</p>
-        <table style="width:100%;border-collapse:collapse;font-size:14px">
-          <tr style="background:#f1f5f9">
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;color:#64748b">${ordersLabel}</td>
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;font-weight:600;color:#1e293b;text-align:right">${orders}</td>
-          </tr>
-          <tr>
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;color:#64748b">${claimedLabel}</td>
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;font-weight:600;color:#1e293b;text-align:right">${claimed}</td>
-          </tr>
-          <tr style="background:#f1f5f9">
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;color:#64748b">Rate</td>
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;font-weight:600;color:#1e293b;text-align:right">${rate}%</td>
-          </tr>
-          <tr>
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;color:#64748b">${timeLabel}</td>
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;font-weight:700;color:#dc2626;text-align:right">${avgFmt}</td>
-          </tr>
-          <tr style="background:#f1f5f9">
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;color:#64748b">Bad Handling</td>
-            <td style="padding:10px 14px;border:1px solid #e2e8f0;font-weight:600;color:#1e293b;text-align:right">${badHandling}</td>
-          </tr>
-        </table>
-        <p style="color:#334155;margin-top:20px">Please review your handling process and ensure your response times are corrected to be within the accepted SLA of <strong style="color:#166534">${slaFmt}</strong>.</p>
-        <hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0">
-        <p style="color:#64748b;font-size:13px;margin:0">Automated report developed by <strong>Ali Isa Mohsen</strong> 36030791</p>
+        <div style="text-align:right">
+          <div style="font-size:11px;color:#1D9E75;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Accepted SLA</div>
+          <div style="font-size:28px;font-weight:700;color:#1D9E75">${slaFmt}</div>
+        </div>
       </div>
-    </div>`;
+      <div style="background:rgba(220,38,38,0.15);border-radius:8px;padding:12px 16px;text-align:center">
+        <span style="font-size:12px;color:#fecaca">SLA exceeded by <strong>${fmtTime(avgTime - slaSeconds)}</strong></span>
+      </div>
+    </div>
+    
+    <!-- Compact KPI tiles -->
+    <p style="color:#1D9E75;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 12px">Performance Breakdown</p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px"><tr>${kpiTiles}</tr></table>
+    
+    <!-- Closing line -->
+    <p style="color:#6b9a8a;font-size:14px;font-style:italic;margin:0 0 8px">We kindly ask you to review your handling process.</p>
+    <p style="color:#6b9a8a;font-size:13px;margin:0">Please ensure your response times are corrected to be within the accepted SLA of <strong style="color:#1D9E75">${slaFmt}</strong>.</p>
+  </td></tr>
+  
+  <!-- Footer -->
+  <tr><td style="padding:16px 32px;background:#0D1F1A;border-top:1px solid rgba(163,45,45,0.2)">
+    <p style="color:#6b9a8a;font-size:10px;margin:0;text-align:center">Automated report developed by <strong style="color:#1D9E75">Ali Isa Mohsen</strong> 36030791</p>
+  </td></tr>
+</table>
+</td></tr></table>
+</body></html>`;
 }
 
 // ─── GENERATE + SEND ALL REPORTS ─────────────────────────────────────────────
 async function sendAllReports(importId, testRecipient = null) {
   if (!GMAIL_USER || !GMAIL_PASS) return;
+
+  // Check global auto-email toggle (skipped for manual test sends)
+  if (!testRecipient) {
+    const emailSettingsSnap = await db.collection('emailSettings').doc('default').get();
+    const autoEmailEnabled = emailSettingsSnap.exists
+      ? emailSettingsSnap.data().autoEmailEnabled !== false
+      : true; // default enabled if doc not yet created
+    if (!autoEmailEnabled) {
+      console.log('[email] Auto email is disabled — skipping send.');
+      return;
+    }
+  }
 
   const effectiveRecipients = testRecipient
     ? { sales: [testRecipient], logistics: [testRecipient], activation: [testRecipient], management: [testRecipient] }
@@ -886,27 +1120,45 @@ async function sendAllReports(importId, testRecipient = null) {
     db.collection('agentMappings').get(),
   ]);
 
-  // Build a map of agentCode -> { email, displayName, agentType }
-  const agentEmailMap = {};
+  // Build full mapping map: agentCode (uppercase) -> { email, displayName, agentType, visible }
+  const mappingMap = {};
   mappingsSnap.docs.forEach(d => {
     const m = d.data();
-    if (m.agentCode && m.email) {
-      agentEmailMap[m.agentCode.toUpperCase()] = {
-        email:       m.email.trim(),
-        displayName: m.displayName || m.agentCode,
-        agentType:   m.agentType   || null,
-      };
-    }
+    if (!m.agentCode) return;
+    mappingMap[m.agentCode.toUpperCase()] = {
+      email:       (m.email || '').trim(),
+      displayName: (m.displayName || '').trim(),
+      agentType:   m.agentType || null,
+      visible:     m.visible !== false,
+    };
   });
+
+  // agentEmailMap is a subset of mappingMap — only agents with an email set
+  const agentEmailMap = {};
+  Object.entries(mappingMap).forEach(([code, m]) => {
+    if (m.email) agentEmailMap[code] = m;
+  });
+
+  // Only include agents that are visible (visible===true) AND have a display name set
+  const isVisible = (agentCode) => {
+    const m = mappingMap[(agentCode || '').toUpperCase()];
+    return !!(m && m.displayName && m.visible !== false);
+  };
 
   const slaData = slaSnap.empty ? {} : slaSnap.docs[0].data();
   const slaSalesSec     = ((slaData.sales      || {}).workingHours || 120) * 60;
   const slaLogisticsSec = ((slaData.logistics  || {}).workingHours || 120) * 60;
   const slaActSec       = ((slaData.activation || {}).workingHours || 120) * 60;
 
-  const salesStats = statsFromDocs(salesSnap.docs,  'claimTimeSec');
-  const logStats   = statsFromDocs(logSnap.docs,    'claimTimeSec');
-  const actStats   = statsFromDocs(actSnap.docs,    'handleTimeSec');
+  // Build stats then filter to visible-only agents; add displayName for email output
+  // Keep original agent code in `name` so SLA alert email lookups still work
+  const applyMapping = (stats) => stats
+    .filter(a => isVisible(a.name))
+    .map(a => ({ ...a, displayName: mappingMap[a.name.toUpperCase()]?.displayName || a.name }));
+
+  const salesStats = applyMapping(statsFromDocs(salesSnap.docs,  'claimTimeSec'));
+  const logStats   = applyMapping(statsFromDocs(logSnap.docs,    'claimTimeSec'));
+  const actStats   = applyMapping(statsFromDocs(actSnap.docs,    'handleTimeSec'));
 
   const salesAvgTime = safeAvg(salesStats.map(a => a.avgTime).filter(Boolean));
   const logAvgTime   = safeAvg(logStats.map(a => a.avgTime).filter(Boolean));
@@ -918,33 +1170,21 @@ async function sendAllReports(importId, testRecipient = null) {
   const dateRange = period.label;
   const dateTag   = period.from.toISOString().slice(0, 10);
 
-  const emailHtml = (dept) => `
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:#1d4ed8;padding:24px 32px;border-radius:8px 8px 0 0">
-        <h2 style="color:white;margin:0">Team Performance Report</h2>
-        <p style="color:#bfdbfe;margin:6px 0 0">${dept} · ${dateRange}</p>
-      </div>
-      <div style="background:#f8fafc;padding:24px 32px;border:1px solid #e2e8f0;border-top:none">
-        <p style="color:#334155">Hi,</p>
-        <p style="color:#334155">Please find attached the <strong>${dept} Performance Report</strong> for <strong>${dateRange}</strong>.</p>
-        <p style="color:#334155">This report was generated automatically after the latest data import.</p>
-        <hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0">
-        <p style="color:#64748b;font-size:13px;margin:0">
-          Automated report developed by <strong>Ali Isa Mohsen</strong> 36030791
-        </p>
-      </div>
-    </div>`;
-
-  // ── Generate PDFs by navigating the live app (identical to "Save as PDF")
-  console.log('[sendAllReports] generating PDFs via live app render...');
-  const { salesPDF, logisticsPDF, activationPDF, managementPDF } = await buildAllDeptPDFs(period);
-  console.log('[sendAllReports] PDFs ready, sending emails...');
+  // ── Build HTML email bodies for each department
+  const generatedAt    = new Date().toLocaleString('en-GB');
+  const salesHtml      = buildSalesEmailBody({ stats: salesStats, totalOrders, totalClaimed, avgTime: salesAvgTime, slaSeconds: slaSalesSec, dateRange, generatedAt });
+  const logisticsHtml  = buildLogisticsEmailBody({ stats: logStats,   avgTime: logAvgTime,   slaSeconds: slaLogisticsSec, dateRange, generatedAt });
+  const activationHtml = buildActivationEmailBody({ stats: actStats,  avgTime: actAvgTime,   slaSeconds: slaActSec,       dateRange, generatedAt });
+  const managementHtml = buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt });
 
   // ── Build per-agent SLA alert emails (skipped entirely in test mode)
-  const SLA_ALERT_CC   = ['ali.mohsen@bh.zain.com', 'alaa.alawi@bh.zain.com'];
+  const SLA_ALERT_CC    = ['ali.mohsen@bh.zain.com', 'alaa.alawi@bh.zain.com'];
   const SLA_ALERT_CC_LOG = [...SLA_ALERT_CC, 'NezarN@aramex.com'];
   const agentAlertPromises = [];
   const slaAlerts = []; // track every breach (sent + skipped) for logging
+  if (!testRecipient) {
+    console.log(`[alerts] checking ${salesStats.length} sales / ${logStats.length} logistics / ${actStats.length} activation agents. SLA: sales=${slaSalesSec}s log=${slaLogisticsSec}s act=${slaActSec}s`);
+  }
 
   salesStats.forEach(agent => {
     if (testRecipient) return; // skip alerts in test mode
@@ -1044,10 +1284,10 @@ async function sendAllReports(importId, testRecipient = null) {
   });
 
   await Promise.all([
-    sendReport({ to: effectiveRecipients.sales,      subject: `${subjectPrefix}Sales Performance Report – ${dateRange}`,      html: emailHtml('Sales'),      pdfBuffer: salesPDF,      filename: `sales-report-${dateTag}.pdf` }),
-    sendReport({ to: effectiveRecipients.logistics,  subject: `${subjectPrefix}Logistics Performance Report – ${dateRange}`,  html: emailHtml('Logistics'),  pdfBuffer: logisticsPDF,  filename: `logistics-report-${dateTag}.pdf` }),
-    sendReport({ to: effectiveRecipients.activation, subject: `${subjectPrefix}Activation Performance Report – ${dateRange}`, html: emailHtml('Activation'), pdfBuffer: activationPDF, filename: `activation-report-${dateTag}.pdf` }),
-    sendReport({ to: effectiveRecipients.management, subject: `${subjectPrefix}Management Summary Report – ${dateRange}`,     html: emailHtml('Management'), pdfBuffer: managementPDF, filename: `management-report-${dateTag}.pdf` }),
+    sendReport({ to: effectiveRecipients.sales,      subject: `${subjectPrefix}Sales Performance Report – ${dateRange}`,      html: salesHtml }),
+    sendReport({ to: effectiveRecipients.logistics,  subject: `${subjectPrefix}Logistics Performance Report – ${dateRange}`,  html: logisticsHtml }),
+    sendReport({ to: effectiveRecipients.activation, subject: `${subjectPrefix}Activation Performance Report – ${dateRange}`, html: activationHtml }),
+    sendReport({ to: effectiveRecipients.management, subject: `${subjectPrefix}Management Summary Report – ${dateRange}`,     html: managementHtml }),
     ...(testRecipient ? [] : agentAlertPromises),
   ]);
 
@@ -1099,9 +1339,13 @@ export const processPendingReports = onSchedule(
 );
 
 // ─── MAIN IMPORT LOGIC ───────────────────────────────────────────────────────
-async function runImport(csvText, filename) {
-  const { headers, rows } = parseCSV(csvText);
-  if (!headers.length || !rows.length) {
+// csvText2 / filename2: optional second CSV (portal / manually-created orders).
+// Both files share identical headers. Rows are merged before processing so
+// portal orders (channel = 'Portal') flow through the same collections but
+// are flagged by their channel value for the dashboards to filter separately.
+async function runImport(csvText, filename, csvText2 = null, filename2 = null) {
+  const { headers, rows: rows1 } = parseCSV(csvText);
+  if (!headers.length || !rows1.length) {
     throw new Error('CSV is empty or invalid');
   }
 
@@ -1110,6 +1354,16 @@ async function runImport(csvText, filename) {
   if (missing.length > 0) {
     throw new Error(`Missing required columns: ${missing.join(', ')}`);
   }
+
+  // Parse and merge second (portal) file if provided
+  let rows2 = [];
+  if (csvText2) {
+    const parsed2 = parseCSV(csvText2);
+    rows2 = parsed2.rows; // Same headers assumed — no extra validation needed
+  }
+
+  const rows = [...rows1, ...rows2];
+  const portalCount = rows.filter(r => (r['CHANNEL'] || '').trim() === 'Portal').length;
 
   const agents = processRows(rows);
   const summary = computeSummary(agents, rows);
@@ -1122,8 +1376,10 @@ async function runImport(csvText, filename) {
   // Save import metadata
   const importRef = await db.collection('imports').add({
     filename: filename || 'unknown.csv',
+    ...(filename2 ? { filename2 } : {}),
     rowCount: totalRows,
     uniqueOrderCount: uniqueCount,
+    portalOrderCount: portalCount,
     agentCount: agents.length,
     salesAgentCount: summary.salesAgents || 0,
     logisticsAgentCount: summary.logisticsAgents || 0,
@@ -1146,13 +1402,18 @@ async function runImport(csvText, filename) {
     const activationAssignDT = parseDateTime(row['ACTIVATION_ASSIGN_DATE'], row['ACTIVATION_ASSIGN_TIME']);
     const effectiveOrderDT = getEffectiveSalesStartTime(orderDT, row['HOURS_TYPE']);
 
+    // For portal (manually created) orders, the creator is in LOG_USER not SALES_USER_FIRST
+    const isPortal = (row['CHANNEL'] || '').trim() === 'Portal';
+    // Portal orders may not have ORDER_CREATION_DATE; fall back to logistics assign date
+    // so they are not excluded by date range filters in the dashboards.
+    const storedOrderDT = orderDT || (isPortal ? (logisticsAssignDT || activationAssignDT) : null);
     return {
       orderNo,
-      agentName: getRowAgentName(row),
+      agentName: isPortal ? (row['LOG_USER'] || '').trim() || getRowAgentName(row) : getRowAgentName(row),
       channel: row['CHANNEL'] || '',
       status: row['ESHOP_ORDER_STATUS'] || '',
       hoursType: row['HOURS_TYPE'] || '',
-      orderDT: orderDT ? Timestamp.fromDate(orderDT) : null,
+      orderDT: storedOrderDT ? Timestamp.fromDate(storedOrderDT) : null,
       effectiveOrderDT: effectiveOrderDT ? Timestamp.fromDate(effectiveOrderDT) : null,
       claimDT: claimDT ? Timestamp.fromDate(claimDT) : null,
       logisticsAssignDT: logisticsAssignDT ? Timestamp.fromDate(logisticsAssignDT) : null,
@@ -1229,7 +1490,7 @@ async function runImport(csvText, filename) {
   const logisticsCount = await processInChunks('logisticsOrders', rows, processLogisticsOrder, 450, isLargeFile ? 50 : 0);
   const activationCount = await processInChunks('activationOrders', rows, processActivationOrder, 450, isLargeFile ? 50 : 0);
 
-  // Save agent mappings
+  // Save agent mappings (combined from both files)
   if (!isLargeFile || agents.length < 1000) {
     const existingSnap = await db.collection('agentMappings').get();
     const existing = {};
@@ -1240,7 +1501,7 @@ async function runImport(csvText, filename) {
 
     const parsedAgents = [];
     const agentSet = new Set();
-    rows.forEach(row => {
+    rows.forEach(row => {  // `rows` is already the merged array
       extractAllAgentsFromRow(row).forEach(({ agentCode, agentType }) => {
         if (!agentCode || agentSet.has(agentCode.toUpperCase())) return;
         agentSet.add(agentCode.toUpperCase());
@@ -1257,7 +1518,7 @@ async function runImport(csvText, filename) {
       batch.set(ref, {
         agentCode: code,
         displayName: '',
-        visible: true,
+        visible: false,
         agentType: agent.agentType || 'sales',
       });
       batchCount++;
@@ -1273,18 +1534,28 @@ async function runImport(csvText, filename) {
   }
 
   // Schedule PDF reports to be sent 5 minutes after import (once per day)
-  const dateKey    = new Date().toISOString().slice(0, 10); // e.g. '2026-04-01'
-  const sendAt     = new Date(Date.now() + 5 * 60 * 1000);
-  const pendingRef = db.collection('pendingReports').doc(dateKey);
-  const existing   = await pendingRef.get();
-  // Only schedule if not already sent today
-  if (!existing.exists || existing.data().sent !== true) {
-    await pendingRef.set({
-      importId,
-      sendAt:    Timestamp.fromDate(sendAt),
-      sent:      false,
-      createdAt: FieldValue.serverTimestamp(),
-    });
+  // Guard 1: check if auto email is enabled globally
+  const emailSettingsSnap = await db.collection('emailSettings').doc('default').get();
+  const autoEmailEnabled = emailSettingsSnap.exists
+    ? emailSettingsSnap.data().autoEmailEnabled !== false
+    : true; // default to enabled if doc doesn't exist
+
+  if (autoEmailEnabled) {
+    const dateKey    = new Date().toISOString().slice(0, 10); // e.g. '2026-04-01'
+    const sendAt     = new Date(Date.now() + 5 * 60 * 1000);
+    const pendingRef = db.collection('pendingReports').doc(dateKey);
+    const existingPending = await pendingRef.get();
+    // Guard 2: never schedule if an email was already sent today
+    if (!existingPending.exists || existingPending.data().sent !== true) {
+      await pendingRef.set({
+        importId,
+        sendAt:    Timestamp.fromDate(sendAt),
+        sent:      false,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+  } else {
+    console.log('[email] Auto email disabled — skipping schedule for this import.');
   }
 
   return {
@@ -1292,8 +1563,10 @@ async function runImport(csvText, filename) {
     agents: agents.length,
     summary,
     filename: filename || 'unknown.csv',
+    ...(filename2 ? { filename2 } : {}),
     rowCount: totalRows,
     uniqueOrderCount: uniqueCount,
+    portalOrderCount: portalCount,
     salesCount,
     logisticsCount,
     activationCount,
@@ -1333,10 +1606,10 @@ export const autoImportCsv = onRequest(
     }
 
     try {
+      // ── Main file ──────────────────────────────────────────────────────────
       let csvText = req.body?.csv || req.body?.text;
       const filename = req.body?.filename || req.query?.filename || `auto-import-${new Date().toISOString()}.csv`;
 
-      // If a URL was provided, fetch the CSV content from it
       if (!csvText && req.body?.url) {
         const response = await fetch(req.body.url);
         if (!response.ok) throw new Error(`Failed to fetch CSV from URL: ${response.status}`);
@@ -1351,7 +1624,18 @@ export const autoImportCsv = onRequest(
         return;
       }
 
-      const result = await runImport(csvText, filename);
+      // ── Second file (portal / manually-created orders) — optional ──────────
+      // Accepted as: url2 (fetched server-side), csv2, or text2
+      let csvText2 = req.body?.csv2 || req.body?.text2 || null;
+      const filename2 = req.body?.filename2 || null;
+
+      if (!csvText2 && req.body?.url2) {
+        const res2 = await fetch(req.body.url2);
+        if (!res2.ok) throw new Error(`Failed to fetch portal CSV from url2: ${res2.status}`);
+        csvText2 = await res2.text();
+      }
+
+      const result = await runImport(csvText, filename, csvText2, filename2);
 
       // Immediately send reports after import — don't wait for the scheduled function
       try {

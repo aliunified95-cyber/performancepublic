@@ -250,9 +250,12 @@ function getRowAgentName(row) {
 // Extract ALL agents from a row with their default types from the report
 function extractAllAgentsFromRow(row) {
   const agents = [];
-  
-  // Sales agents
-  const salesAgent = (row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim();
+
+  // Sales agents — for portal (manually created) orders, creator is in LOG_USER
+  const isPortal = (row['CHANNEL'] || '').trim() === 'Portal';
+  const salesAgent = isPortal
+    ? (row['LOG_USER'] || row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim()
+    : (row['SALES_USER_FIRST'] || row['SALESMAN_ID'] || '').trim();
   if (salesAgent) {
     agents.push({ agentCode: salesAgent, agentType: 'sales' });
   }
@@ -628,6 +631,9 @@ function SuccessSection({ result, onNewImport }) {
   const kpis = [
     { val: uniqueCount.toLocaleString(), lbl: 'Unique Orders' },
     { val: result.rowCount.toLocaleString(), lbl: 'Total Rows Processed' },
+    ...(result.portalOrderCount > 0 ? [
+      { val: result.portalOrderCount.toLocaleString(), lbl: 'Portal (Created) Orders' },
+    ] : []),
     ...(hasCollectionCounts ? [
       { val: result.salesCount?.toLocaleString() || '0', lbl: 'Sales Orders Saved' },
       { val: result.logisticsCount?.toLocaleString() || '0', lbl: 'Logistics Orders Saved' },
@@ -777,17 +783,29 @@ function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRe
     flashSaved(mapping.agentCode);
   }
 
+  // Returns only agents in the currently active team tab
+  function tabAgents() {
+    return filterType === 'all' ? combined : combined.filter(m => (m.agentType || 'sales') === filterType);
+  }
+
   function handleShowAll() {
-    const items = combined
+    const items = tabAgents()
       .filter(m => m.visible === false)
       .map(m => ({ agentCode: m.agentCode, displayName: localNames[m.agentCode] ?? m.displayName, visible: true, agentType: m.agentType || 'sales' }));
     if (items.length) onBulkUpdate(items);
   }
 
   function handleHideAll() {
-    const items = combined
+    const items = tabAgents()
       .filter(m => m.visible !== false)
       .map(m => ({ agentCode: m.agentCode, displayName: localNames[m.agentCode] ?? m.displayName, visible: false, agentType: m.agentType || 'sales' }));
+    if (items.length) onBulkUpdate(items);
+  }
+
+  function handleHideUnmapped() {
+    const items = tabAgents()
+      .filter(m => !(localNames[m.agentCode] ?? m.displayName).trim())
+      .map(m => ({ agentCode: m.agentCode, displayName: '', visible: false, agentType: m.agentType || 'sales' }));
     if (items.length) onBulkUpdate(items);
   }
 
@@ -873,6 +891,45 @@ function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRe
 
       <div className="mapping-divider" />
 
+      {/* Team tabs */}
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', borderBottom: '1px solid rgba(216,245,236,0.1)', paddingBottom: '0' }}>
+        {[
+          { key: 'all',        label: 'All',        count: combined.length },
+          { key: 'sales',      label: 'Sales',      count: totalSales },
+          { key: 'logistics',  label: 'Logistics',  count: totalLogistics },
+          { key: 'activation', label: 'Activation', count: totalActivation },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setFilterType(tab.key)}
+            style={{
+              padding: '8px 18px',
+              fontSize: '13px',
+              fontWeight: 600,
+              fontFamily: 'inherit',
+              cursor: 'pointer',
+              border: 'none',
+              borderBottom: filterType === tab.key ? '2px solid var(--amethyst)' : '2px solid transparent',
+              background: 'transparent',
+              color: filterType === tab.key ? 'var(--amethyst)' : 'var(--text-dim)',
+              borderRadius: '0',
+              transition: 'color 0.15s, border-color 0.15s',
+              marginBottom: '-1px',
+            }}
+          >
+            {tab.label}
+            <span style={{
+              marginLeft: '6px',
+              fontSize: '11px',
+              padding: '1px 6px',
+              borderRadius: '10px',
+              background: filterType === tab.key ? 'rgba(123,63,160,0.18)' : 'rgba(216,245,236,0.07)',
+              color: filterType === tab.key ? 'var(--amethyst)' : 'var(--text-dim)',
+            }}>{tab.count}</span>
+          </button>
+        ))}
+      </div>
+
       {/* Toolbar */}
       <div className="mapping-toolbar">
         <div className="mapping-search-wrap">
@@ -888,31 +945,10 @@ function AgentMappingsSection({ mappings, parsedAgents, loading, loadError, onRe
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <select
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value)}
-            style={{
-              background: 'rgba(216, 245, 236, 0.05)',
-              border: '1px solid rgba(216, 245, 236, 0.13)',
-              borderRadius: '8px',
-              padding: '7px 12px',
-              fontSize: '13px',
-              color: 'var(--mint)',
-              outline: 'none',
-              fontFamily: 'inherit',
-              cursor: 'pointer',
-            }}
-          >
-            <option value="all">All Types</option>
-            <option value="sales">Sales Only</option>
-            <option value="activation">Activation Only</option>
-            <option value="logistics">Logistics Only</option>
-          </select>
-          <div className="mapping-bulk-btns">
-            <button className="btn-ghost" onClick={handleShowAll}>Show all</button>
-            <button className="btn-ghost" onClick={handleHideAll}>Hide all</button>
-          </div>
+        <div className="mapping-bulk-btns">
+          <button className="btn-ghost" onClick={handleShowAll}>Show all</button>
+          <button className="btn-ghost" onClick={handleHideAll}>Hide all</button>
+          <button className="btn-ghost" onClick={handleHideUnmapped}>Hide unmapped</button>
         </div>
       </div>
 
@@ -1313,6 +1349,12 @@ export default function Admin() {
   const [fileMeta, setFileMeta] = useState('');
   const [parsedHeaders, setParsedHeaders] = useState([]);
   const [parsedRows, setParsedRows] = useState([]);
+  // Second file: Portal / manually-created orders
+  const [file2, setFile2] = useState(null);
+  const [fileName2, setFileName2] = useState('');
+  const [fileMeta2, setFileMeta2] = useState('');
+  const [parsedRows2, setParsedRows2] = useState([]);
+  const [importProgress2, setImportProgress2] = useState({ pct: 0, label: '', show: false });
   const [validResult, setValidResult] = useState(null);
   const [importProgress, setImportProgress] = useState({ pct: 0, label: '', show: false });
   const [importing, setImporting] = useState(false);
@@ -1347,24 +1389,30 @@ export default function Admin() {
   const [slaLoading, setSlaLoading] = useState(false);
   const [slaSaving, setSlaSaving] = useState(false);
 
+  // Auto-email toggle state
+  const [autoEmailEnabled, setAutoEmailEnabled] = useState(true);
+  const [emailToggleSaving, setEmailToggleSaving] = useState(false);
+
   const parsedAgents = useMemo(() => {
     const map = {};
-    parsedRows.forEach(row => {
+    // Force CHANNEL=Portal for second-file rows so LOG_USER is extracted as the sales agent
+    [...parsedRows, ...parsedRows2.map(r => ({ ...r, CHANNEL: 'Portal' }))].forEach(row => {
       const agents = extractAllAgentsFromRow(row);
       agents.forEach(({ agentCode, agentType }) => {
         if (!agentCode) return;
         if (!map[agentCode]) {
-          map[agentCode] = { agentCode, displayName: '', visible: true, agentType, source: 'report' };
+          map[agentCode] = { agentCode, displayName: '', visible: false, agentType, source: 'report' };
         }
       });
     });
     return Object.values(map).sort((a, b) => a.agentCode.localeCompare(b.agentCode));
-  }, [parsedRows]);
+  }, [parsedRows, parsedRows2]);
 
   useEffect(() => {
     loadHistory();
     loadMappings();
     loadSLASettings();
+    loadEmailSettings();
     // Update data source pill
     localStorage.setItem('tpw_data_source', 'live');
   }, []);
@@ -1397,6 +1445,31 @@ export default function Admin() {
       alert('Failed to save SLA settings: ' + err.message);
     } finally {
       setSlaSaving(false);
+    }
+  }
+
+  async function loadEmailSettings() {
+    try {
+      const snap = await getDocs(query(collection(db, 'emailSettings'), limit(1)));
+      if (!snap.empty) {
+        const data = snap.docs[0].data();
+        setAutoEmailEnabled(data.autoEmailEnabled !== false);
+      }
+    } catch (err) {
+      console.error('Error loading email settings:', err);
+    }
+  }
+
+  async function saveAutoEmailEnabled(enabled) {
+    setEmailToggleSaving(true);
+    try {
+      await setDoc(doc(db, 'emailSettings', 'default'), { autoEmailEnabled: enabled }, { merge: true });
+      setAutoEmailEnabled(enabled);
+    } catch (err) {
+      console.error('Error saving email settings:', err);
+      alert('Failed to save: ' + err.message);
+    } finally {
+      setEmailToggleSaving(false);
     }
   }
 
@@ -1718,22 +1791,54 @@ export default function Admin() {
     setStep(1);
   }
 
+  function handleFile2(f) {
+    setFile2(f);
+    setFileName2(f.name);
+    setFileMeta2(`${(f.size / 1024).toFixed(1)} KB · ${f.type || 'text/csv'}`);
+    setImportProgress2({ pct: 10, label: 'Reading file…', show: true });
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setImportProgress2({ pct: 40, label: 'Parsing rows…', show: true });
+      setTimeout(() => {
+        const { rows } = parseCSV(ev.target.result);
+        setParsedRows2(rows);
+        setImportProgress2({ pct: 100, label: `Parsed ${rows.length.toLocaleString()} rows`, show: true });
+        setTimeout(() => setImportProgress2(p => ({ ...p, show: false })), 800);
+      }, 50);
+    };
+    reader.readAsText(f);
+  }
+
+  function handleRemove2() {
+    setFile2(null);
+    setFileName2('');
+    setFileMeta2('');
+    setParsedRows2([]);
+    setImportProgress2({ pct: 0, label: '', show: false });
+  }
+
   async function doImport() {
     if (importing) return;
     setImporting(true);
     setImportProgress({ pct: 5, label: 'Processing rows…', show: true });
 
     try {
-      const agents  = processRows(parsedRows);
-      const summary = computeSummary(agents, parsedRows);
-      
+      // Combine main rows + portal/manual-order rows into one dataset
+      // Force CHANNEL = 'Portal' for second file rows regardless of CSV contents
+      const allParsedRows = [...parsedRows, ...parsedRows2.map(r => ({ ...r, CHANNEL: 'Portal' }))];
+
+      const agents  = processRows(allParsedRows);
+      const summary = computeSummary(agents, allParsedRows);
+
       // Get unique order numbers for stats
-      const orderNos = parsedRows
+      const orderNos = allParsedRows
         .map(row => (row['CHANNEL_ORDER_NO'] || '').trim())
         .filter(Boolean);
       const uniqueOrderNos = [...new Set(orderNos)];
-      const totalRows = parsedRows.length;
+      const totalRows = allParsedRows.length;
       const uniqueCount = uniqueOrderNos.length;
+      const portalCount = allParsedRows.filter(r => (r['CHANNEL'] || '').trim() === 'Portal').length;
       
       // Note: We're skipping the expensive existence check for large files
       // since we're using set with merge anyway. The first import will create,
@@ -1745,8 +1850,10 @@ export default function Admin() {
       // Save import metadata
       const importRef = await addDoc(collection(db, 'imports'), {
         filename:    file ? file.name : 'unknown.csv',
+        filename2:   file2 ? file2.name : null,
         rowCount:    totalRows,
         uniqueOrderCount: uniqueCount,
+        portalOrderCount: portalCount,
         agentCount:  agents.length,
         salesAgentCount: summary.salesAgents || 0,
         logisticsAgentCount: summary.logisticsAgents || 0,
@@ -1785,37 +1892,37 @@ export default function Admin() {
         let processedCount = 0;
         let batch = writeBatch(db);
         let batchCount = 0;
-        
-        for (let i = 0; i < parsedRows.length; i++) {
-          const order = rowProcessor(parsedRows[i]);
+
+        for (let i = 0; i < allParsedRows.length; i++) {
+          const order = rowProcessor(allParsedRows[i]);
           if (!order) continue;
-          
+
           const docRef = doc(db, collectionName, order.orderNo);
           batch.set(docRef, order, { merge: true });
           batchCount++;
           processedCount++;
-          
+
           if (batchCount >= CHUNK) {
             await commitWithRetry(batch);
             batch = writeBatch(db);
             batchCount = 0;
-            
+
             // Update progress
             const pct = Math.round(20 + (processedCount / totalCount) * 70);
             setImportProgress({ pct, label: `${collectionLabel}: ${processedCount.toLocaleString()} of ${totalCount.toLocaleString()}…`, show: true });
-            
+
             // Small delay for large files to prevent rate limiting
-            if (isLargeFile && i < parsedRows.length - 1) {
+            if (isLargeFile && i < allParsedRows.length - 1) {
               await delay(BATCH_DELAY);
             }
           }
         }
-        
+
         // Commit remaining
         if (batchCount > 0) {
           await commitWithRetry(batch);
         }
-        
+
         return processedCount;
       };
 
@@ -1832,13 +1939,18 @@ export default function Admin() {
 
         const effectiveOrderDT = getEffectiveSalesStartTime(orderDT, row['HOURS_TYPE']);
 
+        // For portal (manually created) orders, the creator is in LOG_USER not SALES_USER_FIRST
+        const isPortal = (row['CHANNEL'] || '').trim() === 'Portal';
+        // Portal orders may not have ORDER_CREATION_DATE; fall back to logistics assign date
+        // so they are not excluded by date range filters in the dashboards.
+        const storedOrderDT = orderDT || (isPortal ? (logisticsAssignDT || activationAssignDT) : null);
         return {
           orderNo,
-          agentName:    getRowAgentName(row),
+          agentName:    isPortal ? (row['LOG_USER'] || '').trim() || getRowAgentName(row) : getRowAgentName(row),
           channel:      row['CHANNEL'] || '',
           status:       row['ESHOP_ORDER_STATUS'] || '',
           hoursType:    row['HOURS_TYPE'] || '',
-          orderDT:      orderDT ? Timestamp.fromDate(orderDT) : null,
+          orderDT:      storedOrderDT ? Timestamp.fromDate(storedOrderDT) : null,
           effectiveOrderDT: effectiveOrderDT ? Timestamp.fromDate(effectiveOrderDT) : null,
           claimDT:      claimDT ? Timestamp.fromDate(claimDT) : null,
           logisticsAssignDT: logisticsAssignDT ? Timestamp.fromDate(logisticsAssignDT) : null,
@@ -1935,8 +2047,10 @@ export default function Admin() {
         agents:   agents.length,
         summary,
         filename: file ? file.name : 'unknown.csv',
+        filename2: file2 ? file2.name : null,
         rowCount: totalRows,
         uniqueOrderCount: uniqueCount,
+        portalOrderCount: portalCount,
         salesCount,
         logisticsCount,
         activationCount,
@@ -1974,7 +2088,7 @@ export default function Admin() {
               batch.set(ref, {
                 agentCode: code,
                 displayName: '',
-                visible: true,
+                visible: false,
                 agentType: agent.agentType || 'sales',
               });
               
@@ -2015,6 +2129,11 @@ export default function Admin() {
     setFileMeta('');
     setParsedHeaders([]);
     setParsedRows([]);
+    setFile2(null);
+    setFileName2('');
+    setFileMeta2('');
+    setParsedRows2([]);
+    setImportProgress2({ pct: 0, label: '', show: false });
     setValidResult(null);
     setImportResult(null);
     setImportProgress({ pct: 0, label: '', show: false });
@@ -2076,14 +2195,36 @@ export default function Admin() {
           <>
             <StepsBar step={step} />
 
-            <UploadCard
-              onFile={handleFile}
-              file={file}
-              fileName={fileName}
-              fileMeta={fileMeta}
-              onRemove={handleRemove}
-              progress={importProgress}
-            />
+            {/* Dual upload cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '0' }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--mint)', marginBottom: '8px', paddingLeft: '2px' }}>
+                  Main Report
+                </div>
+                <UploadCard
+                  onFile={handleFile}
+                  file={file}
+                  fileName={fileName}
+                  fileMeta={fileMeta}
+                  onRemove={handleRemove}
+                  progress={importProgress}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--amethyst)', marginBottom: '8px', paddingLeft: '2px' }}>
+                  Portal / Manually Created Orders{' '}
+                  <span style={{ fontWeight: 400, opacity: 0.6, fontSize: '11px' }}>(optional — same headers, channel = Portal)</span>
+                </div>
+                <UploadCard
+                  onFile={handleFile2}
+                  file={file2}
+                  fileName={fileName2}
+                  fileMeta={fileMeta2}
+                  onRemove={handleRemove2}
+                  progress={importProgress2}
+                />
+              </div>
+            </div>
 
             {step >= 2 && parsedHeaders.length > 0 && (
               <ValidationSection headers={parsedHeaders} parsedRows={parsedRows} />
@@ -2095,7 +2236,7 @@ export default function Admin() {
 
             {step >= 3 && !importResult && (
               <ImportBar
-                rowCount={parsedRows.length}
+                rowCount={parsedRows.length + parsedRows2.length}
                 onImport={doImport}
                 importing={importing}
                 progress={importProgress}
@@ -2137,12 +2278,36 @@ export default function Admin() {
         )}
         
         {activeTab === 'sla' && (
-          <SLASection
-            slaSettings={slaSettings}
-            setSlaSettings={setSlaSettings}
-            onSave={saveSLASettings}
-            saving={slaSaving}
-          />
+          <>
+            <SLASection
+              slaSettings={slaSettings}
+              setSlaSettings={setSlaSettings}
+              onSave={saveSLASettings}
+              saving={slaSaving}
+            />
+            <div className="section-card" style={{ marginTop: '16px' }}>
+              <div className="section-card-head">
+                <div>
+                  <div className="section-card-title">Auto Email</div>
+                  <div className="section-card-sub">Controls whether auto imports trigger daily report emails. Disable before running imports you don't want to send emails for.</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '8px 0' }}>
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={autoEmailEnabled}
+                    disabled={emailToggleSaving}
+                    onChange={(e) => saveAutoEmailEnabled(e.target.checked)}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+                <span style={{ fontSize: '14px', color: autoEmailEnabled ? 'var(--emerald)' : '#E74C3C', fontWeight: 600 }}>
+                  {emailToggleSaving ? 'Saving…' : autoEmailEnabled ? 'Enabled — emails will send after import' : 'Disabled — no emails will be sent'}
+                </span>
+              </div>
+            </div>
+          </>
         )}
 
         {activeTab === 'emails' && (() => {

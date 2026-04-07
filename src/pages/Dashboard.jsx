@@ -137,6 +137,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState }) {
 
   const {
     claimedOrders,
+    portalOrderCount,
     logisticsAssigned,
     activationAssigned,
     salesAvgClaimTimeSec,
@@ -159,7 +160,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState }) {
       </div>
 
       {/* ── Pipeline stages ── */}
-      <div className="journey-stages" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+      <div className="journey-stages" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <StageCard
           icon={
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -171,6 +172,20 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState }) {
           avgTime={salesAvgClaimTimeSec}
           color={COLORS.claimed}
           timeLabel="avg claim time"
+        />
+
+        <StageCard
+          icon={
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          }
+          title="Created Orders"
+          count={portalOrderCount}
+          avgTime={0}
+          color="#9B59B6"
+          timeLabel="portal channel"
         />
 
         <StageCard
@@ -310,6 +325,7 @@ export default function Dashboard() {
       // No demo data - return zeros when no real data available
       return {
         claimedOrders:                0,
+        portalOrderCount:             0,
         logisticsAssigned:            0,
         activationAssigned:           0,
         salesAvgClaimTimeSec:         0,
@@ -337,15 +353,23 @@ export default function Dashboard() {
       ? allActivationOrders.filter(o => o.assignDT && o.assignDT >= bounds.from && o.assignDT <= bounds.to)
       : allActivationOrders;
 
-    // Counts
-    const claimedOrders    = salesOrders.filter(o => o.claimed).length;
+    // Split portal (manually created, channel=Portal) from regular sales orders.
+    // Portal orders are excluded from claim KPIs but included in handle (assign) time.
+    const portalSalesOrders  = salesOrders.filter(o => (o.channel || '') === 'Portal');
+    const regularSalesOrders = salesOrders.filter(o => (o.channel || '') !== 'Portal');
+
+    // Counts — portal excluded from claimed count to match AgentsPerformance rules
+    const claimedOrders    = regularSalesOrders.filter(o => o.claimed).length;
+    const portalOrderCount = portalSalesOrders.length;
     const logisticsAssigned  = logisticsFiltered.length;
     const activationAssigned = activationFiltered.length;
 
     // Sales metrics — same filtering as AgentsPerformance
-    const salesClaimTimes  = salesOrders
+    // Claim time: non-portal only (portal orders have no meaningful claim time KPI)
+    const salesClaimTimes  = regularSalesOrders
       .map(o => o.claimTimeSec)
       .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+    // Handle (assign) time: ALL orders including portal
     const salesAssignTimes = salesOrders
       .map(o => o.assignTimeSec)
       .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
@@ -372,6 +396,7 @@ export default function Dashboard() {
 
     return {
       claimedOrders,
+      portalOrderCount,
       logisticsAssigned,
       activationAssigned,
       salesAvgClaimTimeSec:         Math.round(avg(salesClaimTimes)),

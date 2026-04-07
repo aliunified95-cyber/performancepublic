@@ -122,6 +122,7 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
   const totalOrders  = data.reduce((s, a) => s + a.total, 0);
   const totalClaimed = data.reduce((s, a) => s + a.claimed, 0);
   const totalBadHandling = data.reduce((s, a) => s + (a.badHandlingCount || 0), 0);
+  const totalPortalOrders = data.reduce((s, a) => s + (a.portalCount || 0), 0);
   const avgClaim     = Math.round(avg(data.map(a => a.claimTimeSec)));
   const avgAssign    = Math.round(avg(data.map(a => a.assignTimeSec)));
   const slaSeconds = (slaMinutes || 120) * 60;
@@ -228,6 +229,19 @@ function HeroBadge({ data, currentRange, customDates, importMeta, loadState, sla
           <div className="hero-kpi-label">Bad Handling</div>
           <span className="hero-kpi-badge badge-neu">{`> ${BAD_HANDLING_THRESHOLD_SEC / 60} min`}</span>
         </div>
+
+        {/* Created Orders (Portal / manually created) */}
+        <div className="hero-kpi">
+          <div className="hero-kpi-icon" style={{ background: 'rgba(123,63,160,0.18)' }}>
+            <svg viewBox="0 0 24 24" style={{ stroke: 'var(--amethyst)' }} aria-hidden="true">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </div>
+          <div className="hero-kpi-value">{totalPortalOrders.toLocaleString()}</div>
+          <div className="hero-kpi-label">Created Orders</div>
+          <span className="hero-kpi-badge badge-neu">Portal channel</span>
+        </div>
       </div>
     </div>
   );
@@ -252,6 +266,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
     else if (col === 'claimTime')  { av = a.claimTimeSec;  bv = b.claimTimeSec; }
     else if (col === 'assignTime') { av = a.assignTimeSec; bv = b.assignTimeSec; }
     else if (col === 'badHandling') { av = a.badHandlingCount || 0; bv = b.badHandlingCount || 0; }
+    else if (col === 'portalCount') { av = a.portalCount || 0; bv = b.portalCount || 0; }
     else { av = a.total; bv = b.total; }
     return dir === 'asc' ? av - bv : bv - av;
   });
@@ -262,15 +277,16 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
   const paged      = filtered.slice((safePage - 1) * ROWS_PER_PAGE, safePage * ROWS_PER_PAGE);
 
   const cols = [
-    { key: 'name',       label: 'Agent' },
-    { key: 'total',      label: 'Total Orders' },
-    { key: 'claimed',    label: 'Claimed' },
-    { key: 'claimRate',  label: 'Claim Rate' },
-    { key: 'claimTime',  label: 'Avg Claim Time' },
-    { key: 'assignTime', label: 'Avg Assign Time' },
-    { key: 'badHandling', label: 'Bad Handling' },
-    { key: 'status',     label: 'Status' },
-    { key: 'trend',      label: 'Trend' },
+    { key: 'name',         label: 'Agent' },
+    { key: 'total',        label: 'Total Orders' },
+    { key: 'claimed',      label: 'Claimed' },
+    { key: 'claimRate',    label: 'Claim Rate' },
+    { key: 'claimTime',    label: 'Avg Claim Time' },
+    { key: 'assignTime',   label: 'Avg Handle Time' },
+    { key: 'badHandling',  label: 'Bad Handling' },
+    { key: 'portalCount',  label: 'Created Orders' },
+    { key: 'status',       label: 'Status' },
+    { key: 'trend',        label: 'Trend' },
   ];
 
   function SortIcon({ colKey }) {
@@ -320,7 +336,7 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
           <tbody>
             {paged.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
+                <td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
                   No agents found
                 </td>
               </tr>
@@ -333,12 +349,13 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
               const statusLabel = agent.status === 'active' ? 'Active'
                 : agent.status === 'away' ? 'Away' : 'Offline';
               const badHandlingCount = agent.badHandlingCount || 0;
+              const portalCount = agent.portalCount || 0;
 
               return (
                 <tr key={agent.name + i}>
                   <td>
-                    <div 
-                      className="agent-cell" 
+                    <div
+                      className="agent-cell"
                       onClick={() => onAgentClick(agent)}
                       style={{ cursor: 'pointer' }}
                       title="Click to view detailed breakdown"
@@ -379,6 +396,15 @@ function AgentTable({ data, searchQuery, onSearch, sortState, onSort, page, onPa
                     {badHandlingCount > 0 ? (
                       <span className="sla-exceeded" style={{ color: '#E74C3C', fontWeight: 600 }}>
                         {badHandlingCount}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-dim)' }}>0</span>
+                    )}
+                  </td>
+                  <td className="num-cell">
+                    {portalCount > 0 ? (
+                      <span style={{ color: 'var(--amethyst)', fontWeight: 600 }}>
+                        {portalCount}
                       </span>
                     ) : (
                       <span style={{ color: 'var(--text-dim)' }}>0</span>
@@ -590,30 +616,40 @@ export default function AgentsPerformance() {
     return salesAgents.map((a, idx) => {
       const initials = a.name.split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase();
       const color    = COLORS[idx % COLORS.length];
-      const claimed  = a.orders.filter(o => o.claimed).length;
-      
-      // Calculate bad handling: orders with claim time > 1000 minutes (60000 seconds)
-      const badHandlingCount = a.orders.filter(o => o.claimTimeSec != null && o.claimTimeSec > BAD_HANDLING_THRESHOLD_SEC).length;
-      
-      // Filter out bad handling times from average calculation
-      const claimTimes  = a.orders
+
+      // Split portal (manually created) orders from regular orders
+      const portalOrders  = a.orders.filter(o => (o.channel || '') === 'Portal');
+      const regularOrders = a.orders.filter(o => (o.channel || '') !== 'Portal');
+
+      // KPIs only count regular (non-portal) orders
+      const claimed  = regularOrders.filter(o => o.claimed).length;
+
+      // Bad handling: non-portal orders only
+      const badHandlingCount = regularOrders.filter(o => o.claimTimeSec != null && o.claimTimeSec > BAD_HANDLING_THRESHOLD_SEC).length;
+
+      // Claim time: non-portal orders only, excluding bad handling
+      const claimTimes  = regularOrders
         .map(o => o.claimTimeSec)
         .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+
+      // Handle (assign) time: ALL orders including portal, excluding bad handling
       const assignTimes = a.orders
         .map(o => o.assignTimeSec)
         .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
-      
+
       const mapping = mappingMap[(a.name || '').toUpperCase()];
-      const visible = mapping ? mapping.visible !== false : true;
+      // Agent is visible only if: has a mapping, displayName is set (non-empty), and not explicitly hidden
+      const visible = !!(mapping && (mapping.displayName || '').trim() && mapping.visible !== false);
 
       const currentAvgClaim = Math.round(avg(claimTimes));
 
-      // Compute previous period avg claim time for this agent
+      // Trend: based on non-portal claim times only
       let trend = 'neutral';
       let trendPct = 0;
       if (prevBounds) {
         const prevOrders = prevOrdersByAgent[a.name] || [];
         const prevClaimTimes = prevOrders
+          .filter(o => (o.channel || '') !== 'Portal')
           .map(o => o.claimTimeSec)
           .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
         const prevAvgClaim = Math.round(avg(prevClaimTimes));
@@ -621,12 +657,11 @@ export default function AgentsPerformance() {
         if (prevAvgClaim > 0 && currentAvgClaim > 0) {
           const pct = ((currentAvgClaim - prevAvgClaim) / prevAvgClaim) * 100;
           trendPct = Math.round(pct);
-          // Lower claim time = better performance
-          if (pct < -3)      trend = 'improving'; // claim time dropped → improving
-          else if (pct > 3)  trend = 'declining'; // claim time rose → declining
+          if (pct < -3)      trend = 'improving';
+          else if (pct > 3)  trend = 'declining';
           else               trend = 'neutral';
         } else if (prevAvgClaim === 0 && currentAvgClaim > 0) {
-          trend = 'neutral'; // no prior data
+          trend = 'neutral';
         }
       }
 
@@ -635,18 +670,19 @@ export default function AgentsPerformance() {
         role:          mapping?.displayName || a.name,
         initials,
         color,
-        total:         a.orders.length,
+        total:         regularOrders.length,   // non-portal only
         claimed,
+        portalCount:   portalOrders.length,    // manually created orders
         claimTimeSec:  currentAvgClaim,
-        assignTimeSec: Math.round(avg(assignTimes)),
+        assignTimeSec: Math.round(avg(assignTimes)), // all orders incl. portal
         badHandlingCount,
         status:        'active',
         trend,
         trendPct,
         visible,
-        orders:        a.orders, // Pass orders for modal
+        orders:        a.orders,
       };
-    }).filter(a => a.total > 0 && a.visible).sort((a, b) => b.total - a.total);
+    }).filter(a => (a.total > 0 || a.portalCount > 0) && a.visible).sort((a, b) => b.total - a.total);
   }, [loadState, allOrders, currentRange, customDates]);
 
   function handleAgentClick(agent) {
