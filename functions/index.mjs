@@ -828,7 +828,7 @@ function buildReportEmailHtml({ dept, color, dateRange, generatedAt, kpis, secti
 
   const sectionsHtml = sections.map(sec => {
     const thead = sec.headers.map((h, i) =>
-      `<th style="background:#132B22;color:#1D9E75;padding:12px ${i===0?'16px':'12px'};text-align:${i===0?'left':'right'};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;border-bottom:2px solid #1D9E75">${h}</th>`
+      `<th style="background:#132B22;color:#1D9E75;padding:12px ${i===0?'16px':'12px'};text-align:${i===0?'left':'right'};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;border-bottom:2px solid #1D9E75;${i===0?'width:22%;':''}">${h}</th>`
     ).join('');
 
     const tbody = sec.rows.map((row, idx) => {
@@ -840,8 +840,8 @@ function buildReportEmailHtml({ dept, color, dateRange, generatedAt, kpis, secti
         const align = ci === 0 ? 'left' : 'right';
         const fontSize = ci === 0 ? '13px' : '12px';
         const fontWeight = (ci===0||c.bold||isBadHandling) ? '600' : '400';
-        // Agent name on single line - no sub-line for agentId
-        return `<td style="padding:10px ${ci===0?'16px':'12px'};background:${bg};font-size:${fontSize};color:${textColor};font-weight:${fontWeight};border-bottom:1px solid rgba(29,158,117,0.1);text-align:${align};white-space:nowrap">${c.v}</td>`;
+        // Agent name on single line with wider column - no sub-line for agentId
+        return `<td style="padding:10px ${ci===0?'16px':'12px'};background:${bg};font-size:${fontSize};color:${textColor};font-weight:${fontWeight};border-bottom:1px solid rgba(29,158,117,0.1);text-align:${align};white-space:nowrap;${ci===0?'width:22%;':''}">${c.v}</td>`;
       }).join('')}</tr>`;
     }).join('');
 
