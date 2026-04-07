@@ -1276,29 +1276,53 @@ async function sendAllReports(importId, testRecipient = null) {
   const activationHtml = buildActivationEmailBody({ stats: actStats,  avgTime: actAvgTime,   slaSeconds: slaActSec,       dateRange, generatedAt });
   const managementHtml = buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt });
 
-  // ── Build per-agent SLA alert emails (skipped entirely in test mode)
+  // ── Build per-agent SLA alert emails
+  // In test mode: send all alerts to testRecipient only (ali.mohsen@bh.zain.com)
+  // In live mode: send to actual agents with managers in CC
   const SLA_ALERT_CC    = ['ali.mohsen@bh.zain.com', 'alaa.alawi@bh.zain.com'];
   const SLA_ALERT_CC_LOG = [...SLA_ALERT_CC, 'NezarN@aramex.com'];
   const agentAlertPromises = [];
   const slaAlerts = []; // track every breach (sent + skipped) for logging
-  if (!testRecipient) {
-    console.log(`[alerts] checking ${salesStats.length} sales / ${logStats.length} logistics / ${actStats.length} activation agents. SLA: sales=${slaSalesSec}s log=${slaLogisticsSec}s act=${slaActSec}s`);
-  }
+  
+  console.log(`[alerts] checking ${salesStats.length} sales / ${logStats.length} logistics / ${actStats.length} activation agents. SLA: sales=${slaSalesSec}s log=${slaLogisticsSec}s act=${slaActSec}s`);
 
   salesStats.forEach(agent => {
-    if (testRecipient) return; // skip alerts in test mode
     const mapping = agentEmailMap[agent.name.toUpperCase()];
     // Only alert for this agent's primary department to avoid duplicate emails
     if (mapping?.agentType && mapping.agentType !== 'sales') return;
     if (agent.avgTime != null && agent.avgTime > slaSalesSec) {
-      if (mapping?.email) {
-        slaAlerts.push({ agentName: mapping.displayName, department: 'Sales', avgTime: agent.avgTime, slaSeconds: slaSalesSec, email: mapping.email, status: 'sent' });
+      const agentDisplayName = mapping?.displayName || agent.name;
+      
+      if (testRecipient) {
+        // TEST MODE: Send alert to test recipient only, with note about which agent
+        slaAlerts.push({ agentName: agentDisplayName, department: 'Sales', avgTime: agent.avgTime, slaSeconds: slaSalesSec, email: testRecipient, status: 'test_sent' });
+        agentAlertPromises.push(sendEmail({
+          to:      testRecipient,
+          subject: `[TEST] SLA Alert – ${agentDisplayName} (Sales) – ${dateRange}`,
+          html:    buildAgentSlaAlertHtml({
+            agentName:    agentDisplayName,
+            department:   'Sales',
+            dateRange,
+            avgTime:      agent.avgTime,
+            slaSeconds:   slaSalesSec,
+            orders:       agent.orders,
+            claimed:      agent.claimed,
+            rate:         agent.rate,
+            badHandling:  agent.badHandling || 0,
+            timeLabel:    'Avg Claim Time',
+            ordersLabel:  'Total Orders',
+            claimedLabel: 'Claimed',
+          }),
+        }));
+      } else if (mapping?.email) {
+        // LIVE MODE: Send to actual agent
+        slaAlerts.push({ agentName: agentDisplayName, department: 'Sales', avgTime: agent.avgTime, slaSeconds: slaSalesSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
           to:      mapping.email,
           cc:      SLA_ALERT_CC,
-          subject: `SLA Alert – ${mapping.displayName} – ${dateRange}`,
+          subject: `SLA Alert – ${agentDisplayName} – ${dateRange}`,
           html:    buildAgentSlaAlertHtml({
-            agentName:    mapping.displayName,
+            agentName:    agentDisplayName,
             department:   'Sales',
             dateRange,
             avgTime:      agent.avgTime,
@@ -1319,18 +1343,41 @@ async function sendAllReports(importId, testRecipient = null) {
   });
 
   logStats.forEach(agent => {
-    if (testRecipient) return; // skip alerts in test mode
     const mapping = agentEmailMap[agent.name.toUpperCase()];
     if (mapping?.agentType && mapping.agentType !== 'logistics') return;
     if (agent.avgTime != null && agent.avgTime > slaLogisticsSec) {
-      if (mapping?.email) {
-        slaAlerts.push({ agentName: mapping.displayName, department: 'Logistics', avgTime: agent.avgTime, slaSeconds: slaLogisticsSec, email: mapping.email, status: 'sent' });
+      const agentDisplayName = mapping?.displayName || agent.name;
+      
+      if (testRecipient) {
+        // TEST MODE: Send alert to test recipient only
+        slaAlerts.push({ agentName: agentDisplayName, department: 'Logistics', avgTime: agent.avgTime, slaSeconds: slaLogisticsSec, email: testRecipient, status: 'test_sent' });
+        agentAlertPromises.push(sendEmail({
+          to:      testRecipient,
+          subject: `[TEST] SLA Alert – ${agentDisplayName} (Logistics) – ${dateRange}`,
+          html:    buildAgentSlaAlertHtml({
+            agentName:    agentDisplayName,
+            department:   'Logistics',
+            dateRange,
+            avgTime:      agent.avgTime,
+            slaSeconds:   slaLogisticsSec,
+            orders:       agent.orders,
+            claimed:      agent.claimed,
+            rate:         agent.rate,
+            badHandling:  agent.badHandling || 0,
+            timeLabel:    'Avg Claim Time',
+            ordersLabel:  'Total Assigned',
+            claimedLabel: 'Claimed',
+          }),
+        }));
+      } else if (mapping?.email) {
+        // LIVE MODE: Send to actual agent
+        slaAlerts.push({ agentName: agentDisplayName, department: 'Logistics', avgTime: agent.avgTime, slaSeconds: slaLogisticsSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
           to:      mapping.email,
           cc:      SLA_ALERT_CC_LOG,
-          subject: `SLA Alert – ${mapping.displayName} – ${dateRange}`,
+          subject: `SLA Alert – ${agentDisplayName} – ${dateRange}`,
           html:    buildAgentSlaAlertHtml({
-            agentName:    mapping.displayName,
+            agentName:    agentDisplayName,
             department:   'Logistics',
             dateRange,
             avgTime:      agent.avgTime,
@@ -1351,18 +1398,41 @@ async function sendAllReports(importId, testRecipient = null) {
   });
 
   actStats.forEach(agent => {
-    if (testRecipient) return; // skip alerts in test mode
     const mapping = agentEmailMap[agent.name.toUpperCase()];
     if (mapping?.agentType && mapping.agentType !== 'activation') return;
     if (agent.avgTime != null && agent.avgTime > slaActSec) {
-      if (mapping?.email) {
-        slaAlerts.push({ agentName: mapping.displayName, department: 'Activation', avgTime: agent.avgTime, slaSeconds: slaActSec, email: mapping.email, status: 'sent' });
+      const agentDisplayName = mapping?.displayName || agent.name;
+      
+      if (testRecipient) {
+        // TEST MODE: Send alert to test recipient only
+        slaAlerts.push({ agentName: agentDisplayName, department: 'Activation', avgTime: agent.avgTime, slaSeconds: slaActSec, email: testRecipient, status: 'test_sent' });
+        agentAlertPromises.push(sendEmail({
+          to:      testRecipient,
+          subject: `[TEST] SLA Alert – ${agentDisplayName} (Activation) – ${dateRange}`,
+          html:    buildAgentSlaAlertHtml({
+            agentName:    agentDisplayName,
+            department:   'Activation',
+            dateRange,
+            avgTime:      agent.avgTime,
+            slaSeconds:   slaActSec,
+            orders:       agent.orders,
+            claimed:      agent.claimed,
+            rate:         agent.rate,
+            badHandling:  agent.badHandling || 0,
+            timeLabel:    'Avg Handle Time',
+            ordersLabel:  'Total Assigned',
+            claimedLabel: 'Completed',
+          }),
+        }));
+      } else if (mapping?.email) {
+        // LIVE MODE: Send to actual agent
+        slaAlerts.push({ agentName: agentDisplayName, department: 'Activation', avgTime: agent.avgTime, slaSeconds: slaActSec, email: mapping.email, status: 'sent' });
         agentAlertPromises.push(sendEmail({
           to:      mapping.email,
           cc:      SLA_ALERT_CC,
-          subject: `SLA Alert – ${mapping.displayName} – ${dateRange}`,
+          subject: `SLA Alert – ${agentDisplayName} – ${dateRange}`,
           html:    buildAgentSlaAlertHtml({
-            agentName:    mapping.displayName,
+            agentName:    agentDisplayName,
             department:   'Activation',
             dateRange,
             avgTime:      agent.avgTime,
@@ -1387,7 +1457,7 @@ async function sendAllReports(importId, testRecipient = null) {
     sendReport({ to: effectiveRecipients.logistics,  subject: `${subjectPrefix}Logistics Performance Report – ${dateRange}`,  html: logisticsHtml }),
     sendReport({ to: effectiveRecipients.activation, subject: `${subjectPrefix}Activation Performance Report – ${dateRange}`, html: activationHtml }),
     sendReport({ to: effectiveRecipients.management, subject: `${subjectPrefix}Management Summary Report – ${dateRange}`,     html: managementHtml }),
-    ...(testRecipient ? [] : agentAlertPromises),
+    ...agentAlertPromises, // Include alerts in both test and live mode
   ]);
 
   // Save to email history
