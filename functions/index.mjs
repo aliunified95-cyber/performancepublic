@@ -346,8 +346,13 @@ function statsFromDocs(docs, timeField) {
     const data = d.data();
     const agent = data.agentName || '';
     if (!agent) return;
-    if (!map[agent]) map[agent] = { orders: 0, claimed: 0, times: [], badCount: 0, assignTimes: [] };
+    if (!map[agent]) map[agent] = { orders: 0, claimed: 0, times: [], badCount: 0, assignTimes: [], portalOrders: 0 };
     map[agent].orders++;
+    // Track portal orders separately (channel = 'Portal' or 'PORTAL')
+    const channel = (data.channel || '').toLowerCase();
+    if (channel === 'portal') {
+      map[agent].portalOrders++;
+    }
     if (data.claimed) {
       map[agent].claimed++;
       const t = data[timeField];
@@ -366,6 +371,7 @@ function statsFromDocs(docs, timeField) {
     name,
     orders:      d.orders,
     claimed:     d.claimed,
+    portalOrders: d.portalOrders,
     rate:        d.orders ? Math.round(d.claimed / d.orders * 100) : 0,
     avgTime:     safeAvg(d.times),
     avgHandleTime: safeAvg(d.assignTimes),
@@ -834,8 +840,8 @@ function buildReportEmailHtml({ dept, color, dateRange, generatedAt, kpis, secti
         const align = ci === 0 ? 'left' : 'right';
         const fontSize = ci === 0 ? '13px' : '12px';
         const fontWeight = (ci===0||c.bold||isBadHandling) ? '600' : '400';
-        const agentIdSub = ci === 0 && c.agentId ? `<div style="font-size:10px;color:#6b9a8a;margin-top:2px">${c.agentId}</div>` : '';
-        return `<td style="padding:10px ${ci===0?'16px':'12px'};background:${bg};font-size:${fontSize};color:${textColor};font-weight:${fontWeight};border-bottom:1px solid rgba(29,158,117,0.1);text-align:${align};white-space:nowrap">${c.v}${agentIdSub}</td>`;
+        // Agent name on single line - no sub-line for agentId
+        return `<td style="padding:10px ${ci===0?'16px':'12px'};background:${bg};font-size:${fontSize};color:${textColor};font-weight:${fontWeight};border-bottom:1px solid rgba(29,158,117,0.1);text-align:${align};white-space:nowrap">${c.v}</td>`;
       }).join('')}</tr>`;
     }).join('');
 
@@ -885,28 +891,30 @@ function buildSalesEmailBody({ stats, totalOrders, totalClaimed, avgTime, avgHan
   const rate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
   const isSlaExceeded = avgTime > slaSeconds;
   const isHandleSlaExceeded = avgHandleTime > (handleSlaSeconds || slaSeconds);
+  const totalPortalOrders = stats.reduce((s, a) => s + (a.portalOrders || 0), 0);
   return buildReportEmailHtml({
     dept: 'Sales', color: '#1D9E75', dateRange, generatedAt,
     kpis: [
       { label: 'Total Orders',   value: totalOrders.toLocaleString() },
       { label: 'Claimed',        value: totalClaimed.toLocaleString(), badge: `${rate}%` },
       { label: 'Claim Rate',     value: `${rate}%` },
+      { label: 'Created Orders', value: totalPortalOrders.toLocaleString() },
       { label: 'Avg Claim Time', value: fmtTime(avgTime), exceeded: isSlaExceeded, badge: isSlaExceeded ? 'SLA Exceeded' : 'On Track' },
       { label: 'Avg Handle Time', value: fmtTime(avgHandleTime), exceeded: isHandleSlaExceeded, badge: isHandleSlaExceeded ? 'SLA Exceeded' : 'On Track' },
       { label: 'Agents',         value: String(stats.length), badge: 'active' },
     ],
-    sections: [{ headers: ['Agent','Orders','Claimed','Claim Rate','Avg Claim Time','Avg Handle Time','Bad Handling','Trend'],
+    sections: [{ headers: ['Agent','Orders','Created','Claimed','Claim Rate','Avg Claim Time','Avg Handle Time','Bad Handling'],
       rows: stats.map(a => {
         const handleTimeExceeded = a.avgHandleTime != null && a.avgHandleTime > (handleSlaSeconds || slaSeconds);
         return { cells: [
           { v: a.displayName || a.name, agentId: a.name },
           { v: a.orders.toLocaleString() },
+          { v: (a.portalOrders || 0) > 0 ? (a.portalOrders).toLocaleString() : '—' },
           { v: a.claimed.toLocaleString() },
           { v: `${a.rate}%` },
           { v: fmtTime(a.avgTime), red: a.avgTime != null && a.avgTime > slaSeconds },
           { v: fmtTime(a.avgHandleTime), red: handleTimeExceeded },
           { v: a.badHandling > 0 ? String(a.badHandling) : '—' },
-          { v: '→' },
         ]};
       }) }],
   });
@@ -926,7 +934,7 @@ function buildLogisticsEmailBody({ stats, avgTime, slaSeconds, dateRange, genera
       { label: 'Avg Claim Time', value: fmtTime(avgTime), exceeded: isSlaExceeded, badge: isSlaExceeded ? 'SLA Exceeded' : 'On Track' },
       { label: 'Agents',         value: String(stats.length), badge: 'active' },
     ],
-    sections: [{ headers: ['Agent','Assigned','Claimed','Claim Rate','Avg Claim Time','Bad Handling','Trend'],
+    sections: [{ headers: ['Agent','Assigned','Claimed','Claim Rate','Avg Claim Time','Bad Handling'],
       rows: stats.map(a => ({ cells: [
         { v: a.displayName || a.name, agentId: a.name },
         { v: a.orders.toLocaleString() },
@@ -934,7 +942,6 @@ function buildLogisticsEmailBody({ stats, avgTime, slaSeconds, dateRange, genera
         { v: `${a.rate}%` },
         { v: fmtTime(a.avgTime), red: a.avgTime != null && a.avgTime > slaSeconds },
         { v: a.badHandling > 0 ? String(a.badHandling) : '—' },
-        { v: '→' },
       ]})) }],
   });
 }
@@ -953,7 +960,7 @@ function buildActivationEmailBody({ stats, avgTime, slaSeconds, dateRange, gener
       { label: 'Avg Handle Time', value: fmtTime(avgTime), exceeded: isSlaExceeded, badge: isSlaExceeded ? 'SLA Exceeded' : 'On Track' },
       { label: 'Agents',          value: String(stats.length), badge: 'active' },
     ],
-    sections: [{ headers: ['Agent','Assigned','Completed','Completion Rate','Avg Handle Time','Bad Handling','Trend'],
+    sections: [{ headers: ['Agent','Assigned','Completed','Completion Rate','Avg Handle Time','Bad Handling'],
       rows: stats.map(a => ({ cells: [
         { v: a.displayName || a.name, agentId: a.name },
         { v: a.orders.toLocaleString() },
@@ -961,52 +968,112 @@ function buildActivationEmailBody({ stats, avgTime, slaSeconds, dateRange, gener
         { v: `${a.rate}%` },
         { v: fmtTime(a.avgTime), red: a.avgTime != null && a.avgTime > slaSeconds },
         { v: a.badHandling > 0 ? String(a.badHandling) : '—' },
-        { v: '→' },
       ]})) }],
   });
 }
 
 function buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt }) {
-  const salesRate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
-  const top5 = arr => arr.slice(0, 5);
+  // Calculate aggregate statistics
+  const totalPortalOrders = salesStats.reduce((s, a) => s + (a.portalOrders || 0), 0);
+  const totalLogAssigned = logStats.reduce((s, a) => s + a.orders, 0);
+  const totalLogClaimed = logStats.reduce((s, a) => s + a.claimed, 0);
+  const totalActAssigned = actStats.reduce((s, a) => s + a.orders, 0);
+  const totalActCompleted = actStats.reduce((s, a) => s + a.claimed, 0);
   
-  // Mini-table rows for each department
-  const salesMiniRows = top5(salesStats).map(a => ({ cells: [
-    { v: a.displayName || a.name, agentId: a.name },
-    { v: `${a.orders} orders` },
-    { v: `${a.rate}%` },
-    { v: '→' },
-  ]}));
+  // Calculate average handling times
+  const salesAvgHandleTime = safeAvg(salesStats.map(a => a.avgHandleTime).filter(Boolean)) || 0;
+  const logAvgHandleTime = safeAvg(logStats.map(a => a.avgHandleTime).filter(Boolean)) || 0;
+  const actAvgHandleTime = safeAvg(actStats.map(a => a.avgHandleTime).filter(Boolean)) || 0;
+  const totalHandleTime = salesAvgHandleTime + logAvgHandleTime + actAvgHandleTime;
   
-  const logMiniRows = top5(logStats).map(a => ({ cells: [
-    { v: a.displayName || a.name, agentId: a.name },
-    { v: `${a.orders} assigned` },
-    { v: `${a.rate}%` },
-    { v: '→' },
-  ]}));
+  // Build custom KPI section HTML
+  const kpiTile = (label, value, subtext, color = '#1D9E75') => `
+    <div style="background:#132B22;border:1px solid rgba(29,158,117,0.2);border-radius:10px;padding:16px 12px;text-align:center;margin-bottom:12px;">
+      <div style="font-size:10px;color:#6b9a8a;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em">${label}</div>
+      <div style="font-size:24px;font-weight:700;color:#ffffff;line-height:1.1">${value}</div>
+      ${subtext ? `<div style="font-size:11px;color:${color};margin-top:4px">${subtext}</div>` : ''}
+    </div>
+  `;
   
-  const actMiniRows = top5(actStats).map(a => ({ cells: [
-    { v: a.displayName || a.name, agentId: a.name },
-    { v: `${a.orders} assigned` },
-    { v: `${a.rate}%` },
-    { v: '→' },
-  ]}));
+  const handlingTimeTile = (label, time, desc) => `
+    <div style="background:#132B22;border:1px solid rgba(29,158,117,0.2);border-radius:10px;padding:12px;text-align:left;margin-bottom:10px;">
+      <div style="font-size:11px;color:#6b9a8a;margin-bottom:2px">${label}</div>
+      <div style="font-size:18px;font-weight:700;color:#ffffff">${fmtTime(time)}</div>
+      <div style="font-size:10px;color:#6b9a8a">${desc}</div>
+    </div>
+  `;
   
-  return buildReportEmailHtml({
-    dept: 'Management Summary', color: '#f59e0b', dateRange, generatedAt,
-    kpis: [
-      { label: 'Total Orders',     value: totalOrders.toLocaleString() },
-      { label: 'Sales Claim Rate', value: `${salesRate}%` },
-      { label: 'Avg Sales Claim',  value: fmtTime(salesAvgTime), exceeded: salesAvgTime > slaSalesSec, badge: salesAvgTime > slaSalesSec ? 'SLA!' : '' },
-      { label: 'Avg Log Claim',    value: fmtTime(logAvgTime),   badge: logAvgTime > slaLogisticsSec ? 'SLA!' : '' },
-      { label: 'Avg Act Handle',   value: fmtTime(actAvgTime),   exceeded: actAvgTime > slaActSec, badge: actAvgTime > slaActSec ? 'SLA!' : '' },
-    ],
-    sections: [
-      { title: 'Sales', headers: ['Agent','Key Metric','Rate','Trend'], rows: salesMiniRows },
-      { title: 'Logistics', headers: ['Agent','Key Metric','Rate','Trend'], rows: logMiniRows },
-      { title: 'Activation', headers: ['Agent','Key Metric','Rate','Trend'], rows: actMiniRows },
-    ],
-  });
+  // Main KPIs section - Orders Claimed & Created Orders
+  const ordersSection = `
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
+      <tr>
+        <td width="50%" style="padding-right:8px;">
+          ${kpiTile('Orders Claimed', fmtTime(salesAvgTime), `${totalClaimed.toLocaleString()} orders`, salesAvgTime > slaSalesSec ? '#dc2626' : '#1D9E75')}
+        </td>
+        <td width="50%" style="padding-left:8px;">
+          ${kpiTile('Created Orders', totalPortalOrders > 0 ? totalPortalOrders.toLocaleString() : '—', totalPortalOrders > 0 ? 'portal channel' : '0 orders')}
+        </td>
+      </tr>
+    </table>
+  `;
+  
+  // Assigned section
+  const assignedSection = `
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
+      <tr>
+        <td width="50%" style="padding-right:8px;">
+          ${kpiTile('Assigned to Logistics', fmtTime(logAvgTime), `${totalLogAssigned.toLocaleString()} orders`, logAvgTime > slaLogisticsSec ? '#dc2626' : '#1D9E75')}
+        </td>
+        <td width="50%" style="padding-left:8px;">
+          ${kpiTile('Assigned to Activation', fmtTime(actAvgTime), `${totalActAssigned.toLocaleString()} orders`, actAvgTime > slaActSec ? '#dc2626' : '#1D9E75')}
+        </td>
+      </tr>
+    </table>
+  `;
+  
+  // Handling Times section
+  const handlingSection = `
+    <div style="background:#0D1F1A;border-radius:10px;padding:16px;margin-bottom:20px;">
+      <div style="font-size:11px;font-weight:700;color:#1D9E75;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:12px;">Handling Times</div>
+      ${handlingTimeTile('Sales Handling Time', salesAvgHandleTime, 'claim → logistics assign')}
+      ${handlingTimeTile('Logistics Handling Time', logAvgHandleTime, 'claim → activation assign')}
+      ${handlingTimeTile('Activation Handling Time', actAvgHandleTime, 'claim → complete')}
+      <div style="border-top:1px solid rgba(29,158,117,0.2);margin:12px 0;padding-top:12px;">
+        ${handlingTimeTile('Total Handling Time', totalHandleTime, 'combined average')}
+      </div>
+    </div>
+  `;
+  
+  // Build custom email HTML
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Management Summary Report</title></head>
+<body style="margin:0;padding:0;background:#0D1F1A;font-family:'Segoe UI',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#0D1F1A">
+<tr><td align="center" style="padding:24px 12px">
+<table width="680" cellpadding="0" cellspacing="0" style="max-width:680px;background:#132B22;border-radius:16px;overflow:hidden;border:1px solid rgba(29,158,117,0.25)">
+  <tr><td style="background:#0D1F1A;padding:28px 32px;border-left:4px solid #f59e0b">
+    <div style="font-size:24px;font-weight:700;color:#ffffff;letter-spacing:-0.3px">Management Summary Report</div>
+    <div style="font-size:12px;color:#6b9a8a;margin-top:8px">
+      Generated: ${generatedAt} &nbsp;&bull;&nbsp; Period: <strong style="color:#1D9E75">${dateRange}</strong>
+    </div>
+  </td></tr>
+  <tr><td style="height:2px;background:linear-gradient(90deg,#f59e0b 0%,transparent 100%)"></td></tr>
+  <tr><td style="padding:28px 32px 20px">
+    ${ordersSection}
+    ${assignedSection}
+    ${handlingSection}
+  </td></tr>
+  <tr><td style="padding:16px 32px;background:#0D1F1A;border-top:1px solid rgba(29,158,117,0.2)">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td style="font-size:10px;color:#6b9a8a">Team Performance System</td>
+      <td align="center" style="font-size:10px;color:#6b9a8a">${dateRange}</td>
+      <td align="right" style="font-size:10px;color:#6b9a8a">Automated report developed by Ali Isa Mohsen 36030791</td>
+    </tr></table>
+  </td></tr>
+</table>
+</td></tr></table>
+</body></html>`;
 }
 
 async function sendEmail({ to, cc, subject, html }) {
