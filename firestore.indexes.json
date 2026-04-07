@@ -7,6 +7,14 @@
         { "fieldPath": "importId", "order": "ASCENDING" },
         { "fieldPath": "sentAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "emailHistory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sentAt", "order": "DESCENDING" },
+        { "fieldPath": "isTest", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
