@@ -239,6 +239,7 @@ export default function Dashboard() {
   const [allOrders, setAllOrders]         = useState([]);
   const [allLogisticsOrders, setAllLogisticsOrders] = useState([]);
   const [allActivationOrders, setAllActivationOrders] = useState([]);
+  const [agentMappings, setAgentMappings] = useState([]);
   const [currentRange, setCurrentRange]   = useState(() => localStorage.getItem('tpw_filter_range') || 'month');
   const [customDates, setCustomDates]     = useState(() => ({
     from: localStorage.getItem('tpw_filter_from') || '',
@@ -308,6 +309,10 @@ export default function Dashboard() {
         };
       }).filter(o => o.assignDT);
 
+      // Load agent mappings for visibility filtering (to match individual dashboards)
+      const mappingsSnap = await getDocs(query(collection(db, 'agentMappings'), orderBy('agentCode', 'asc')));
+      setAgentMappings(mappingsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+
       setAllOrders(orders);
       setAllLogisticsOrders(logisticsOrders);
       setAllActivationOrders(activationOrders);
@@ -341,6 +346,36 @@ export default function Dashboard() {
     // ── Live data ──────────────────────────────────────────────────────────────
     const bounds = getRangeBounds(currentRange, customDates);
 
+    // Build mapping lookup for visibility checks (matches individual dashboards)
+    const mappingMap = agentMappings.reduce((acc, m) => {
+      if (m && m.agentCode) acc[m.agentCode.toUpperCase()] = m;
+      return acc;
+    }, {});
+
+    // Visibility check - matches AgentsPerformance.jsx logic exactly
+    // An agent is VISIBLE if: has a mapping with displayName set and visible !== false
+    const isVisible = (agentCode) => {
+      const m = mappingMap[(agentCode || '').toUpperCase()];
+      return !!(m && (m.displayName || '').trim() && m.visible !== false);
+    };
+
+    // Agent type checks - matches individual dashboard logic
+    // Sales: include if no mapping (legacy), or agentType is 'sales' or null
+    const isSalesAgent = (agentCode) => {
+      const m = mappingMap[(agentCode || '').toUpperCase()];
+      return !m || m.agentType === 'sales' || !m.agentType;
+    };
+    // Logistics: include if no mapping (legacy), or agentType is 'logistics'
+    const isLogisticsAgent = (agentCode) => {
+      const m = mappingMap[(agentCode || '').toUpperCase()];
+      return !m || m.agentType === 'logistics';
+    };
+    // Activation: include if no mapping (legacy), or agentType is 'activation'
+    const isActivationAgent = (agentCode) => {
+      const m = mappingMap[(agentCode || '').toUpperCase()];
+      return !m || m.agentType === 'activation';
+    };
+
     const salesOrders = bounds
       ? allOrders.filter(o => o.orderDT && o.orderDT >= bounds.from && o.orderDT <= bounds.to)
       : allOrders;
@@ -353,61 +388,115 @@ export default function Dashboard() {
       ? allActivationOrders.filter(o => o.assignDT && o.assignDT >= bounds.from && o.assignDT <= bounds.to)
       : allActivationOrders;
 
-    // Split portal (manually created, channel=Portal) from regular sales orders.
-    // Portal orders are excluded from claim KPIs but included in handle (assign) time.
-    const portalSalesOrders  = salesOrders.filter(o => (o.channel || '') === 'Portal');
-    const regularSalesOrders = salesOrders.filter(o => (o.channel || '') !== 'Portal');
+    // Filter by visible agents only (to match individual dashboards)
+    // Logic: Must be the right agent type AND visible (has displayName set)
+    const visibleSalesOrders = salesOrders.filter(o => isSalesAgent(o.agentName) && isVisible(o.agentName));
+    const visibleLogisticsOrders = logisticsFiltered.filter(o => isLogisticsAgent(o.agentName) && isVisible(o.agentName));
+    const visibleActivationOrders = activationFiltered.filter(o => isActivationAgent(o.agentName) && isVisible(o.agentName));
 
-    // Counts — portal excluded from claimed count to match AgentsPerformance rules
-    const claimedOrders    = regularSalesOrders.filter(o => o.claimed).length;
-    const portalOrderCount = portalSalesOrders.length;
-    const logisticsAssigned  = logisticsFiltered.length;
-    const activationAssigned = activationFiltered.length;
+    // Sales metrics — EXACT same logic as AgentsPerformance.jsx
+    // Group by agent first
+    const salesAgentMap = {};
+    visibleSalesOrders.forEach(o => {
+      const agent = o.agentName || '';
+      if (!agent) return;
+      if (!salesAgentMap[agent]) salesAgentMap[agent] = { name: agent, orders: [] };
+      salesAgentMap[agent].orders.push(o);
+    });
 
-    // Sales metrics — same filtering as AgentsPerformance
-    // Claim time: non-portal only (portal orders have no meaningful claim time KPI)
-    const salesClaimTimes  = regularSalesOrders
-      .map(o => o.claimTimeSec)
-      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
-    // Handle (assign) time: ALL orders including portal
-    const salesAssignTimes = salesOrders
-      .map(o => o.assignTimeSec)
-      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+    // Calculate per-agent stats (same as AgentsPerformance.jsx agentData)
+    const salesAgentData = Object.values(salesAgentMap).map(a => {
+      const portalOrders = a.orders.filter(o => (o.channel || '').trim().toLowerCase() === 'portal');
+      const regularOrders = a.orders.filter(o => (o.channel || '').trim().toLowerCase() !== 'portal');
+      const claimed = regularOrders.filter(o => o.claimed).length;
+      const claimTimes = regularOrders
+        .map(o => o.claimTimeSec)
+        .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+      const assignTimes = a.orders
+        .map(o => o.assignTimeSec)
+        .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+      return {
+        name: a.name,
+        total: a.orders.length,
+        claimed,
+        portalCount: portalOrders.length,
+        claimTimeSec: Math.round(avg(claimTimes)),
+        assignTimeSec: Math.round(avg(assignTimes)),
+      };
+    });
 
-    // Logistics metrics — same filtering as LogisticsPerformance
-    const logisticsClaimTimes = logisticsFiltered
-      .map(o => o.claimTimeSec)
-      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
-    const logisticsActivationTimes = logisticsFiltered
-      .map(o => o.activationAssignTimeSec)
-      .filter(v => v != null && v >= 0 && v <= BAD_HANDLING_THRESHOLD_SEC);
+    // Simple average of agent averages (NOT weighted) - matches AgentsPerformance HeroBadge
+    const claimedOrders = salesAgentData.reduce((s, a) => s + a.claimed, 0);
+    const portalOrderCount = salesAgentData.reduce((s, a) => s + a.portalCount, 0);
+    const salesAvgClaimTimeSec = Math.round(avg(salesAgentData.map(a => a.claimTimeSec)));
+    const salesAvgAssignTimeSec = Math.round(avg(salesAgentData.map(a => a.assignTimeSec)));
 
-    // Activation metrics — same filtering as ActivationPerformance
-    const activationClaimTimes = activationFiltered
-      .map(o => o.claimTimeSec)
-      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
-    const activationHandleTimes = activationFiltered
-      .map(o => o.handleTimeSec)
-      .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+    // Logistics metrics — EXACT same logic
+    const logisticsAgentMap = {};
+    visibleLogisticsOrders.forEach(o => {
+      const agent = o.agentName || '';
+      if (!agent) return;
+      if (!logisticsAgentMap[agent]) logisticsAgentMap[agent] = { name: agent, orders: [] };
+      logisticsAgentMap[agent].orders.push(o);
+    });
 
-    const salesAvgAssignTimeSec         = Math.round(avg(salesAssignTimes));
-    const logisticsAvgActivationTimeSec = Math.round(avg(logisticsActivationTimes));
-    const activationAvgHandleTimeSec    = Math.round(avg(activationHandleTimes));
+    const logisticsAgentData = Object.values(logisticsAgentMap).map(a => {
+      const claimTimes = a.orders
+        .map(o => o.claimTimeSec)
+        .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+      const activationTimes = a.orders
+        .map(o => o.activationAssignTimeSec)
+        .filter(v => v != null && v >= 0 && v <= BAD_HANDLING_THRESHOLD_SEC);
+      return {
+        name: a.name,
+        total: a.orders.length,
+        claimTimeSec: Math.round(avg(claimTimes)),
+        assignTimeSec: Math.round(avg(activationTimes)),
+      };
+    });
+
+    const logisticsAssigned = logisticsAgentData.reduce((s, a) => s + a.total, 0);
+    const logisticsAvgClaimTimeSec = Math.round(avg(logisticsAgentData.map(a => a.claimTimeSec)));
+    const logisticsAvgActivationTimeSec = Math.round(avg(logisticsAgentData.map(a => a.assignTimeSec)));
+
+    // Activation metrics — EXACT same logic
+    const activationAgentMap = {};
+    visibleActivationOrders.forEach(o => {
+      const agent = o.agentName || '';
+      if (!agent) return;
+      if (!activationAgentMap[agent]) activationAgentMap[agent] = { name: agent, orders: [] };
+      activationAgentMap[agent].orders.push(o);
+    });
+
+    const activationAgentData = Object.values(activationAgentMap).map(a => {
+      const handleTimes = a.orders
+        .map(o => o.handleTimeSec)
+        .filter(v => v != null && v >= 0 && v < 86400 && v <= BAD_HANDLING_THRESHOLD_SEC);
+      return {
+        name: a.name,
+        total: a.orders.length,
+        handleTimeSec: Math.round(avg(handleTimes)),
+      };
+    });
+
+    const activationAssigned = activationAgentData.reduce((s, a) => s + a.total, 0);
+    const activationAvgClaimTimeSec = 0; // Not shown in activation dashboard
+    const activationAvgHandleTimeSec = Math.round(avg(activationAgentData.map(a => a.handleTimeSec)));
 
     return {
       claimedOrders,
       portalOrderCount,
       logisticsAssigned,
       activationAssigned,
-      salesAvgClaimTimeSec:         Math.round(avg(salesClaimTimes)),
+      salesAvgClaimTimeSec,
       salesAvgAssignTimeSec,
-      logisticsAvgClaimTimeSec:     Math.round(avg(logisticsClaimTimes)),
+      logisticsAvgClaimTimeSec,
       logisticsAvgActivationTimeSec,
-      activationAvgClaimTimeSec:    Math.round(avg(activationClaimTimes)),
+      activationAvgClaimTimeSec,
       activationAvgHandleTimeSec,
       totalHandlingTimeSec:         salesAvgAssignTimeSec + logisticsAvgActivationTimeSec + activationAvgHandleTimeSec,
     };
-  }, [loadState, allOrders, allLogisticsOrders, allActivationOrders, currentRange, customDates]);
+  }, [loadState, allOrders, allLogisticsOrders, allActivationOrders, agentMappings, currentRange, customDates]);
 
   function handleRangeChange(range) {
     setCurrentRange(range);

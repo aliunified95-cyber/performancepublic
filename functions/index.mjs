@@ -379,6 +379,63 @@ function statsFromDocs(docs, timeField) {
   })).sort((a, b) => b.orders - a.orders);
 }
 
+// Enhanced stats builder with separate primary and handle time fields
+// Used for accurate weighted averages that match individual dashboards
+function statsFromDocsWithTimes(docs, primaryTimeField, handleTimeField) {
+  const map = {};
+  docs.forEach(d => {
+    const data = d.data();
+    const agent = data.agentName || '';
+    if (!agent) return;
+    if (!map[agent]) map[agent] = { 
+      orders: 0, 
+      claimed: 0, 
+      times: [], 
+      handleTimes: [],
+      badCount: 0, 
+      portalOrders: 0 
+    };
+    map[agent].orders++;
+    
+    // Track portal orders separately
+    const channel = (data.channel || '').toLowerCase();
+    if (channel === 'portal') {
+      map[agent].portalOrders++;
+    }
+    
+    // Primary time (claim time for sales/logistics, handle time for activation)
+    if (data.claimed) {
+      map[agent].claimed++;
+      const t = data[primaryTimeField];
+      if (t != null && t >= 0 && t < BAD_HANDLING_SEC) {
+        map[agent].times.push(t);
+      }
+      if (t != null && t >= BAD_HANDLING_SEC) {
+        map[agent].badCount = (map[agent].badCount || 0) + 1;
+      }
+    }
+    
+    // Handle time (assign time for sales, activation time for logistics, handle time for activation)
+    if (handleTimeField) {
+      const ht = data[handleTimeField];
+      if (ht != null && ht >= 0 && ht < BAD_HANDLING_SEC) {
+        map[agent].handleTimes.push(ht);
+      }
+    }
+  });
+  
+  return Object.entries(map).map(([name, d]) => ({
+    name,
+    orders:        d.orders,
+    claimed:       d.claimed,
+    portalOrders:  d.portalOrders,
+    rate:          d.orders ? Math.round(d.claimed / d.orders * 100) : 0,
+    avgTime:       safeAvg(d.times),
+    avgHandleTime: safeAvg(d.handleTimes),
+    badHandling:   d.badCount || 0,
+  })).sort((a, b) => b.orders - a.orders);
+}
+
 function buildSalesStats(rows) {
   const map = {};
   rows.forEach(row => {
@@ -972,9 +1029,8 @@ function buildActivationEmailBody({ stats, avgTime, slaSeconds, dateRange, gener
   });
 }
 
-function buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt }) {
-  // Calculate aggregate statistics
-  const totalPortalOrders = salesStats.reduce((s, a) => s + (a.portalOrders || 0), 0);
+function buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, totalPortalOrders, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt }) {
+  // totalPortalOrders is now passed directly from the caller (consistent with dashboard)
   const totalLogAssigned = logStats.reduce((s, a) => s + a.orders, 0);
   const totalLogClaimed = logStats.reduce((s, a) => s + a.claimed, 0);
   const totalActAssigned = actStats.reduce((s, a) => s + a.orders, 0);
@@ -1008,10 +1064,10 @@ function buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders,
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
       <tr>
         <td width="50%" style="padding-right:8px;">
-          ${kpiTile('Orders Claimed', fmtTime(salesAvgTime), `${totalClaimed.toLocaleString()} orders`, salesAvgTime > slaSalesSec ? '#dc2626' : '#1D9E75')}
+          ${kpiTile('Orders Claimed', totalClaimed.toLocaleString(), `${fmtTime(salesAvgTime)} avg claim time`, salesAvgTime > slaSalesSec ? '#dc2626' : '#1D9E75')}
         </td>
         <td width="50%" style="padding-left:8px;">
-          ${kpiTile('Created Orders', totalPortalOrders > 0 ? totalPortalOrders.toLocaleString() : '—', totalPortalOrders > 0 ? 'portal channel' : '0 orders')}
+          ${kpiTile('Created Orders', totalPortalOrders > 0 ? totalPortalOrders.toLocaleString() : '0', totalPortalOrders > 0 ? 'portal channel' : 'no portal orders')}
         </td>
       </tr>
     </table>
@@ -1248,23 +1304,64 @@ async function sendAllReports(importId, testRecipient = null) {
   const slaLogisticsSec = ((slaData.logistics  || {}).workingHours || 120) * 60;
   const slaActSec       = ((slaData.activation || {}).workingHours || 120) * 60;
 
+  // Agent type check functions (match frontend logic)
+  const isSalesAgent = (agentCode) => {
+    const m = mappingMap[(agentCode || '').toUpperCase()];
+    return !m || m.agentType === 'sales' || !m.agentType;
+  };
+  const isLogisticsAgent = (agentCode) => {
+    const m = mappingMap[(agentCode || '').toUpperCase()];
+    return !m || m.agentType === 'logistics';
+  };
+  const isActivationAgent = (agentCode) => {
+    const m = mappingMap[(agentCode || '').toUpperCase()];
+    return !m || m.agentType === 'activation';
+  };
+
   // Build stats then filter to visible-only agents of the correct type; add displayName for email output
   // Keep original agent code in `name` so SLA alert email lookups still work
-  const applyMapping = (stats, agentType) => stats
-    .filter(a => isVisible(a.name) && isAgentType(a.name, agentType))
+  const applyMapping = (stats, agentTypeCheck) => stats
+    .filter(a => isVisible(a.name) && agentTypeCheck(a.name))
     .map(a => ({ ...a, displayName: mappingMap[a.name.toUpperCase()]?.displayName || a.name }));
 
-  const salesStats = applyMapping(statsFromDocs(salesSnap.docs,  'claimTimeSec'), 'sales');
-  const logStats   = applyMapping(statsFromDocs(logSnap.docs,    'claimTimeSec'), 'logistics');
-  const actStats   = applyMapping(statsFromDocs(actSnap.docs,    'handleTimeSec'), 'activation');
+  // Build stats with per-agent time arrays
+  const salesStatsRaw = applyMapping(statsFromDocsWithTimes(salesSnap.docs, 'claimTimeSec', 'assignTimeSec'), isSalesAgent);
+  const logStatsRaw   = applyMapping(statsFromDocsWithTimes(logSnap.docs, 'claimTimeSec', 'activationAssignTimeSec'), isLogisticsAgent);
+  const actStatsRaw   = applyMapping(statsFromDocsWithTimes(actSnap.docs, 'handleTimeSec', null), isActivationAgent);
 
-  const salesAvgTime = safeAvg(salesStats.map(a => a.avgTime).filter(Boolean));
-  const salesAvgHandleTime = safeAvg(salesStats.map(a => a.avgHandleTime).filter(Boolean));
-  const logAvgTime   = safeAvg(logStats.map(a => a.avgTime).filter(Boolean));
-  const actAvgTime   = safeAvg(actStats.map(a => a.avgTime).filter(Boolean));
+  // Calculate SIMPLE averages (average of agent averages) to match frontend Dashboard.jsx
+  // Sales: simple avg claim time and handle time
+  const salesAvgTime = salesStatsRaw.length > 0
+    ? Math.round(safeAvg(salesStatsRaw.map(a => a.avgTime).filter(Boolean)))
+    : 0;
+  const salesAvgHandleTime = salesStatsRaw.length > 0
+    ? Math.round(safeAvg(salesStatsRaw.map(a => a.avgHandleTime).filter(Boolean)))
+    : 0;
 
-  const totalOrders  = salesSnap.docs.length;
-  const totalClaimed = salesSnap.docs.filter(d => d.data().claimed).length;
+  // Logistics: simple avg claim time and activation assign time
+  const logAvgTime = logStatsRaw.length > 0
+    ? Math.round(safeAvg(logStatsRaw.map(a => a.avgTime).filter(Boolean)))
+    : 0;
+  const logAvgHandleTime = logStatsRaw.length > 0
+    ? Math.round(safeAvg(logStatsRaw.map(a => a.avgHandleTime).filter(Boolean)))
+    : 0;
+
+  // Activation: simple avg handle time
+  const actAvgTime = actStatsRaw.length > 0
+    ? Math.round(safeAvg(actStatsRaw.map(a => a.avgTime).filter(Boolean)))
+    : 0;
+
+  // For email templates, use the raw stats with display names
+  const salesStats = salesStatsRaw;
+  const logStats = logStatsRaw;
+  const actStats = actStatsRaw;
+
+  // Calculate totals from VISIBLE agents only (matching frontend)
+  const totalOrders = salesStatsRaw.reduce((s, a) => s + a.orders, 0);
+  const totalClaimed = salesStatsRaw.reduce((s, a) => s + a.claimed, 0);
+  
+  // Calculate portal orders from VISIBLE agents only
+  const totalPortalOrders = salesStatsRaw.reduce((s, a) => s + (a.portalOrders || 0), 0);
 
   const dateRange = period.label;
   const dateTag   = period.from.toISOString().slice(0, 10);
@@ -1274,7 +1371,7 @@ async function sendAllReports(importId, testRecipient = null) {
   const salesHtml      = buildSalesEmailBody({ stats: salesStats, totalOrders, totalClaimed, avgTime: salesAvgTime, avgHandleTime: salesAvgHandleTime, slaSeconds: slaSalesSec, handleSlaSeconds: slaSalesSec, dateRange, generatedAt });
   const logisticsHtml  = buildLogisticsEmailBody({ stats: logStats,   avgTime: logAvgTime,   slaSeconds: slaLogisticsSec, dateRange, generatedAt });
   const activationHtml = buildActivationEmailBody({ stats: actStats,  avgTime: actAvgTime,   slaSeconds: slaActSec,       dateRange, generatedAt });
-  const managementHtml = buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt });
+  const managementHtml = buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders, totalClaimed, totalPortalOrders, salesAvgTime, logAvgTime, actAvgTime, slaSalesSec, slaLogisticsSec, slaActSec, dateRange, generatedAt });
 
   // ── Build per-agent SLA alert emails
   // In test mode: send all alerts to testRecipient only (ali.mohsen@bh.zain.com)
@@ -1963,15 +2060,32 @@ export const downloadPDF = onRequest(
     const slaLogisticsSec = ((slaData.logistics  || {}).workingHours || 120) * 60;
     const slaActSec       = ((slaData.activation || {}).workingHours || 120) * 60;
 
-    const salesStats = statsFromDocs(salesSnap.docs, 'claimTimeSec');
-    const logStats   = statsFromDocs(logSnap.docs,   'claimTimeSec');
-    const actStats   = statsFromDocs(actSnap.docs,   'handleTimeSec');
+    // Use statsFromDocsWithTimes for per-agent stats
+    const salesStats = statsFromDocsWithTimes(salesSnap.docs, 'claimTimeSec', 'assignTimeSec');
+    const logStats   = statsFromDocsWithTimes(logSnap.docs, 'claimTimeSec', 'activationAssignTimeSec');
+    const actStats   = statsFromDocsWithTimes(actSnap.docs, 'handleTimeSec', null);
 
-    const salesAvgTime = safeAvg(salesStats.map(a => a.avgTime).filter(Boolean));
-    const logAvgTime   = safeAvg(logStats.map(a => a.avgTime).filter(Boolean));
-    const actAvgTime   = safeAvg(actStats.map(a => a.avgTime).filter(Boolean));
-    const totalOrders  = salesSnap.docs.length;
-    const totalClaimed = salesSnap.docs.filter(d => d.data().claimed).length;
+    // Calculate SIMPLE averages (average of agent averages) to match frontend Dashboard.jsx
+    const salesAvgTime = salesStats.length > 0
+      ? Math.round(safeAvg(salesStats.map(a => a.avgTime).filter(Boolean)))
+      : 0;
+    const salesAvgHandleTime = salesStats.length > 0
+      ? Math.round(safeAvg(salesStats.map(a => a.avgHandleTime).filter(Boolean)))
+      : 0;
+
+    const logAvgTime = logStats.length > 0
+      ? Math.round(safeAvg(logStats.map(a => a.avgTime).filter(Boolean)))
+      : 0;
+    const logAvgHandleTime = logStats.length > 0
+      ? Math.round(safeAvg(logStats.map(a => a.avgHandleTime).filter(Boolean)))
+      : 0;
+
+    const actAvgTime = actStats.length > 0
+      ? Math.round(safeAvg(actStats.map(a => a.avgTime).filter(Boolean)))
+      : 0;
+
+    const totalOrders  = salesStats.reduce((s, a) => s + a.orders, 0);
+    const totalClaimed = salesStats.reduce((s, a) => s + a.claimed, 0);
 
     let pdfBuffer;
 
@@ -2023,16 +2137,22 @@ export const downloadPDF = onRequest(
       });
     } else if (dept === 'management') {
       const salesRate = totalOrders ? Math.round(totalClaimed / totalOrders * 100) : 0;
+      // Calculate portal orders from VISIBLE agents only (matching frontend)
+      const totalPortalOrders = salesStats.reduce((s, a) => s + (a.portalOrders || 0), 0);
       const top5 = arr => arr.slice(0, 5);
+      
+      // Total handling time = sales handle + logistics activation + activation handle
+      const totalHandleTime = salesAvgHandleTime + logAvgHandleTime + actAvgTime;
+      
       pdfBuffer = await buildPDF({
         title: 'Management Summary Report', department: 'management', dateRange,
         slaSeconds: Math.min(slaSalesSec, slaLogisticsSec, slaActSec),
         kpis: [
           { label: 'Total Orders',     value: totalOrders.toLocaleString(),  badge: 'total' },
-          { label: 'Sales Claim Rate', value: `${salesRate}%`,               badge: 'sales' },
+          { label: 'Claimed Orders',   value: totalClaimed.toLocaleString(), badge: 'claimed' },
+          { label: 'Created Orders',   value: totalPortalOrders.toLocaleString(), badge: 'portal' },
           { label: 'Avg Sales Claim',  value: fmtTime(salesAvgTime),         badge: salesAvgTime > slaSalesSec     ? 'SLA Exceeded' : 'team avg', exceeded: salesAvgTime > slaSalesSec },
-          { label: 'Avg Log Claim',    value: fmtTime(logAvgTime),           badge: logAvgTime   > slaLogisticsSec ? 'SLA Exceeded' : 'team avg', exceeded: logAvgTime   > slaLogisticsSec },
-          { label: 'Avg Act Handle',   value: fmtTime(actAvgTime),           badge: actAvgTime   > slaActSec       ? 'SLA Exceeded' : 'team avg', exceeded: actAvgTime   > slaActSec },
+          { label: 'Total Handling',   value: fmtTime(totalHandleTime),      badge: 'combined' },
         ],
         columns: ['Agent / Section', 'Assigned', 'Claimed', 'Rate', 'Avg Time', 'Bad Handling'],
         rows: [
