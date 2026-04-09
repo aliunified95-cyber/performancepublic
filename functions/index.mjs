@@ -1039,7 +1039,7 @@ function buildManagementEmailBody({ salesStats, logStats, actStats, totalOrders,
   // Calculate average handling times
   const salesAvgHandleTime = safeAvg(salesStats.map(a => a.avgHandleTime).filter(Boolean)) || 0;
   const logAvgHandleTime = safeAvg(logStats.map(a => a.avgHandleTime).filter(Boolean)) || 0;
-  const actAvgHandleTime = safeAvg(actStats.map(a => a.avgHandleTime).filter(Boolean)) || 0;
+  const actAvgHandleTime = actAvgTime || 0;
   const totalHandleTime = salesAvgHandleTime + logAvgHandleTime + actAvgHandleTime;
   
   // Build custom KPI section HTML
