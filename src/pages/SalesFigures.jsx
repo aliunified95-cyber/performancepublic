@@ -19,19 +19,15 @@ const CURRENT_MONTH_IDX = new Date().getMonth(); // 0-based
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function scoreBand(v) {
   if (v == null) return 'none';
-  if (v >= 100) return 'outstanding';
-  if (v >= 95) return 'excellent';
-  if (v >= 85) return 'good';
-  if (v >= 75) return 'fair';
+  if (v > 100) return 'outstanding';
+  if (v >= 75) return 'good';
   return 'poor';
 }
 
 const BAND_COLORS = {
   none:        { color: 'var(--text-dim)', bg: 'transparent' },
   outstanding: { color: '#FFD700', bg: 'rgba(255,215,0,0.25)' },
-  excellent:   { color: '#2ECC8A', bg: 'rgba(46,204,138,0.18)' },
-  good:        { color: '#a8edcc', bg: 'rgba(46,204,138,0.08)' },
-  fair:        { color: '#f0c060', bg: 'rgba(243,156,18,0.18)' },
+  good:        { color: '#2ECC8A', bg: 'rgba(46,204,138,0.18)' },
   poor:        { color: '#ff6b6b', bg: 'rgba(231,76,60,0.22)' },
 };
 
@@ -128,6 +124,54 @@ function HeroCard({ title, value, sub, accent = '#2ECC8A', icon, change }) {
   );
 }
 
+// ─── MINI TREND SPARKLINE ─────────────────────────────────────────────────────
+function MiniTrend({ values }) {
+  // values: array of up to 3 numbers (oldest → newest), nulls allowed
+  const pts = values.filter(v => v != null);
+  if (pts.length < 2) {
+    return <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>—</span>;
+  }
+
+  const W = 44, H = 24, PAD = 3;
+  const min = Math.min(...pts);
+  const max = Math.max(...pts);
+  const range = max - min || 1;
+
+  const coords = pts.map((v, i) => ({
+    x: PAD + (i / (pts.length - 1)) * (W - PAD * 2),
+    y: PAD + (1 - (v - min) / range) * (H - PAD * 2),
+  }));
+
+  const polyline = coords.map(c => `${c.x},${c.y}`).join(' ');
+  const last = pts[pts.length - 1];
+  const first = pts[0];
+  const diff = last - first;
+  const trendColor = diff > 1 ? '#2ECC8A' : diff < -1 ? '#ff6b6b' : '#aaa';
+  const arrow = diff > 1 ? '↑' : diff < -1 ? '↓' : '→';
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+      <svg width={W} height={H} style={{ overflow: 'visible' }}>
+        <polyline
+          points={polyline}
+          fill="none"
+          stroke={trendColor}
+          strokeWidth={1.8}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          opacity={0.8}
+        />
+        {coords.map((c, i) => (
+          <circle key={i} cx={c.x} cy={c.y} r={i === coords.length - 1 ? 3 : 2}
+            fill={i === coords.length - 1 ? trendColor : 'rgba(216,245,236,0.3)'}
+            stroke={trendColor} strokeWidth={1} />
+        ))}
+      </svg>
+      <span style={{ fontSize: 12, fontWeight: 700, color: trendColor, minWidth: 10 }}>{arrow}</span>
+    </div>
+  );
+}
+
 // ─── AGENT ROW BAR (mini progress bar) ────────────────────────────────────────
 function MiniBar({ value, max = 120 }) {
   if (value == null) return null;
@@ -165,8 +209,10 @@ export default function SalesFigures() {
 
   // Filters
   const [selectedYear, setSelectedYear] = useState(CURRENT_YEAR);
-  const [sortBy, setSortBy] = useState('name');
-  const [showHidden, setShowHidden] = useState(false);
+
+  // Date range filter (combined month-year format: YYYY-MM)
+  const [filterStartDate, setFilterStartDate] = useState(`${CURRENT_YEAR}-01`);
+  const [filterEndDate, setFilterEndDate] = useState(`${CURRENT_YEAR}-${String(CURRENT_MONTH_IDX + 1).padStart(2, '0')}`);
 
   // Modal
   const [showModal, setShowModal] = useState(false);
@@ -180,6 +226,7 @@ export default function SalesFigures() {
   const [selectedAgentForModal, setSelectedAgentForModal] = useState(null);
   const [coachingNotes, setCoachingNotes] = useState({});
   const [coachingCheckboxes, setCoachingCheckboxes] = useState({});
+  const [coachingNoteText, setCoachingNoteText] = useState('');
   const [coachingSaving, setCoachingSaving] = useState(false);
 
   // ── Firebase ────────────────────────────────────────────────────────────────
@@ -232,39 +279,14 @@ export default function SalesFigures() {
     return Array.from(yrs).sort().reverse();
   }, [monthKeys]);
 
-  // All 12 month keys for the selected year (only up to current month if current year)
-  const yearMonthKeys = useMemo(() => {
-    const cap = selectedYear === CURRENT_YEAR ? CURRENT_MONTH_IDX : 11;
-    const keys = [];
-    for (let m = 0; m <= cap; m++) {
-      keys.push(`${selectedYear}-${String(m + 1).padStart(2, '0')}`);
-    }
-    return keys;
-  }, [selectedYear]);
-
-  // Month keys that actually have data
+  // Month keys that actually have data, filtered by date range
   const monthsWithData = useMemo(() => {
-    return yearMonthKeys.filter(mk => monthKeys.includes(mk));
-  }, [yearMonthKeys, monthKeys]);
+    return monthKeys.filter(mk => mk >= filterStartDate && mk <= filterEndDate);
+  }, [monthKeys, filterStartDate, filterEndDate]);
 
   const visibleAgents = useMemo(() => {
-    let list = salesAgents.filter(a => showHidden || a.visible !== false);
-    if (sortBy === 'name')
-      list = [...list].sort((a, b) => (a.displayName || a.agentCode || '').localeCompare(b.displayName || b.agentCode || ''));
-    if (sortBy === 'avg')
-      list = [...list].sort((a, b) => {
-        const avgA = agentYearAvg(a.agentCode);
-        const avgB = agentYearAvg(b.agentCode);
-        return (avgB ?? -1) - (avgA ?? -1);
-      });
-    if (sortBy === 'latest')
-      list = [...list].sort((a, b) => {
-        const latA = getLatestVal(a.agentCode);
-        const latB = getLatestVal(b.agentCode);
-        return (latB ?? -1) - (latA ?? -1);
-      });
-    return list;
-  }, [salesAgents, showHidden, sortBy, monthsWithData, figuresMap]);
+    return salesAgents.filter(a => a.visible !== false);
+  }, [salesAgents]);
 
   // Helper: agent average for the year
   function agentYearAvg(code) {
@@ -384,6 +406,7 @@ export default function SalesFigures() {
   function openCoachingModal(agent) {
     setSelectedAgentForModal(agent);
     const existing = coachingNotes[agent.agentCode] || {};
+    setCoachingNoteText(existing.note || '');
     setCoachingCheckboxes({
       coaching_needed: (existing.coachingStatus || []).includes('coaching_needed'),
       coaching_done: (existing.coachingStatus || []).includes('coaching_done'),
@@ -397,6 +420,7 @@ export default function SalesFigures() {
     setShowCoachingModal(false);
     setSelectedAgentForModal(null);
     setCoachingCheckboxes({});
+    setCoachingNoteText('');
   }
 
   async function saveCoachingNotes() {
@@ -408,7 +432,7 @@ export default function SalesFigures() {
         .map(([key, _]) => key);
       await setDoc(
         doc(db, 'agentCoachingNotes', selectedAgentForModal.agentCode),
-        { coachingStatus: selected, lastUpdated: new Date() },
+        { coachingStatus: selected, note: coachingNoteText.trim(), lastUpdated: new Date() },
         { merge: true }
       );
       closeCoachingModal();
@@ -511,7 +535,7 @@ export default function SalesFigures() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
                 <h1 style={{ fontSize: 26, fontWeight: 800, color: 'var(--mint)', margin: 0, letterSpacing: '-0.3px' }}>
-                  HR Report
+                  Sales Team Target Performance
                 </h1>
                 <span style={{
                   fontSize: 11, fontWeight: 700,
@@ -587,52 +611,65 @@ export default function SalesFigures() {
             {/* Year pills */}
             <div style={{ display: 'flex', gap: 6, marginRight: 8 }}>
               {availableYears.map(yr => (
-                <YearPill key={yr} year={yr} active={yr === selectedYear} onClick={() => setSelectedYear(yr)} />
+                <YearPill key={yr} year={yr} active={yr === selectedYear} onClick={() => {
+                  setSelectedYear(yr);
+                  const lastMonth = yr === CURRENT_YEAR
+                    ? String(CURRENT_MONTH_IDX + 1).padStart(2, '0')
+                    : '12';
+                  setFilterStartDate(`${yr}-01`);
+                  setFilterEndDate(`${yr}-${lastMonth}`);
+                }} />
               ))}
             </div>
 
             <div style={{ width: 1, height: 28, background: 'var(--border)', margin: '0 4px' }} />
 
-            {/* Sort */}
+            {/* Date Range Filter */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 500 }}>Sort:</span>
+              <span style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 500 }}>From:</span>
               <select
-                value={sortBy}
-                onChange={e => setSortBy(e.target.value)}
+                value={filterStartDate}
+                onChange={e => {
+                  const val = e.target.value;
+                  setFilterStartDate(val);
+                  if (filterEndDate < val) setFilterEndDate(val);
+                }}
                 style={{
                   background: 'rgba(27,58,45,0.8)', border: '1px solid var(--border)',
-                  borderRadius: 8, color: 'var(--mint)', padding: '6px 12px',
-                  fontSize: 13, cursor: 'pointer', outline: 'none',
+                  borderRadius: 6, color: 'var(--mint)', padding: '5px 8px',
+                  fontSize: 12, cursor: 'pointer', outline: 'none', minWidth: 120,
                 }}
               >
-                <option value="name">Name A–Z</option>
-                <option value="avg">Best Average</option>
-                <option value="latest">Latest Month</option>
+                {monthKeys.map(mk => {
+                  const [yr, mo] = mk.split('-');
+                  const label = `${MONTH_NAMES[parseInt(mo) - 1]} ${yr}`;
+                  return <option key={mk} value={mk}>{label}</option>;
+                })}
+              </select>
+              <span style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 500, marginLeft: 4 }}>To:</span>
+              <select
+                value={filterEndDate}
+                onChange={e => setFilterEndDate(e.target.value)}
+                style={{
+                  background: 'rgba(27,58,45,0.8)', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--mint)', padding: '5px 8px',
+                  fontSize: 12, cursor: 'pointer', outline: 'none', minWidth: 120,
+                }}
+              >
+                {monthKeys.filter(mk => mk >= filterStartDate).map(mk => {
+                  const [yr, mo] = mk.split('-');
+                  const label = `${MONTH_NAMES[parseInt(mo) - 1]} ${yr}`;
+                  return <option key={mk} value={mk}>{label}</option>;
+                })}
               </select>
             </div>
-
-            {/* Show hidden toggle */}
-            <button
-              onClick={() => setShowHidden(p => !p)}
-              style={{
-                padding: '6px 14px', borderRadius: 8,
-                border: `1px solid ${showHidden ? 'var(--amethyst)' : 'var(--border)'}`,
-                background: showHidden ? 'rgba(123,63,160,0.2)' : 'rgba(27,58,45,0.5)',
-                color: showHidden ? '#c084fc' : 'var(--text-dim)',
-                fontSize: 13, cursor: 'pointer', fontWeight: showHidden ? 600 : 400,
-                transition: 'all 0.15s',
-              }}
-            >
-              {showHidden ? '● All Agents' : '○ Active Only'}
-            </button>
 
             {/* Legend */}
             <div style={{ flex: 1 }} />
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               {[
-                { label: '≥95%', color: '#2ECC8A', bg: 'rgba(46,204,138,0.18)' },
-                { label: '85–95', color: '#a8edcc', bg: 'rgba(46,204,138,0.08)' },
-                { label: '75–85', color: '#f0c060', bg: 'rgba(243,156,18,0.18)' },
+                { label: '>100%', color: '#FFD700', bg: 'rgba(255,215,0,0.25)' },
+                { label: '75–100%', color: '#2ECC8A', bg: 'rgba(46,204,138,0.18)' },
                 { label: '<75%', color: '#ff6b6b', bg: 'rgba(231,76,60,0.22)' },
               ].map(l => (
                 <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: l.color }}>
@@ -664,32 +701,20 @@ export default function SalesFigures() {
             <div style={{
               borderRadius: 16, border: '1px solid var(--border)',
               background: 'rgba(13,26,19,0.5)',
-              overflow: 'auto',
             }}>
-              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13, tableLayout: 'fixed' }}>
                   <thead>
                     <tr>
                       <th style={{
                         position: 'sticky', top: 0, left: 0, zIndex: 31,
-                        background: 'rgba(13,26,19,0.98)', padding: '12px 16px',
+                        background: 'rgba(13,26,19,0.98)', padding: '10px 12px',
                         textAlign: 'left', fontSize: 11, fontWeight: 600,
                         color: 'var(--text-dim)', textTransform: 'uppercase',
                         letterSpacing: '0.06em',
                         borderBottom: '2px solid var(--border)',
-                        minWidth: 200,
+                        width: '14%',
                       }}>
                         Agent
-                      </th>
-                      <th style={{
-                        position: 'sticky', top: 0, zIndex: 20,
-                        background: 'rgba(123,63,160,0.1)', padding: '12px 16px',
-                        textAlign: 'center', fontSize: 11, fontWeight: 700,
-                        color: '#c084fc', textTransform: 'uppercase',
-                        letterSpacing: '0.06em',
-                        borderBottom: '2px solid var(--border)',
-                        minWidth: 80,
-                      }}>
-                        YTD Avg
                       </th>
                       {monthsWithData.map((mk, i) => {
                         const moIdx = parseInt(mk.split('-')[1], 10) - 1;
@@ -698,17 +723,38 @@ export default function SalesFigures() {
                           <th key={mk} style={{
                             position: 'sticky', top: 0, zIndex: 20,
                             background: isLatest ? 'rgba(46,204,138,0.08)' : 'rgba(13,26,19,0.98)',
-                            padding: '12px 14px', textAlign: 'center',
+                            padding: '10px 4px', textAlign: 'center',
                             fontSize: 11, fontWeight: 600,
                             color: isLatest ? '#2ECC8A' : 'var(--text-dim)',
-                            textTransform: 'uppercase', letterSpacing: '0.06em',
+                            textTransform: 'uppercase', letterSpacing: '0.04em',
                             borderBottom: '2px solid var(--border)',
-                            minWidth: 72, whiteSpace: 'nowrap',
                           }}>
                             {MONTH_NAMES[moIdx]}
                           </th>
                         );
                       })}
+                      <th style={{
+                        position: 'sticky', top: 0, zIndex: 20,
+                        background: 'rgba(123,63,160,0.1)', padding: '10px 8px',
+                        textAlign: 'center', fontSize: 11, fontWeight: 700,
+                        color: '#c084fc', textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                        borderBottom: '2px solid var(--border)',
+                        width: '7%',
+                      }}>
+                        YTD Avg
+                      </th>
+                      <th style={{
+                        position: 'sticky', top: 0, zIndex: 20,
+                        background: 'rgba(46,204,138,0.06)', padding: '10px 8px',
+                        textAlign: 'center', fontSize: 11, fontWeight: 700,
+                        color: '#2ECC8A', textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                        borderBottom: '2px solid var(--border)',
+                        width: '9%', whiteSpace: 'nowrap',
+                      }}>
+                        3M Trend
+                      </th>
                     </tr>
 
                     {/* Team average row */}
@@ -716,15 +762,30 @@ export default function SalesFigures() {
                       <tr>
                         <td style={{
                           position: 'sticky', top: 42, left: 0, zIndex: 31,
-                          background: 'rgba(13,26,19,0.95)', padding: '10px 16px',
+                          background: 'rgba(13,26,19,0.95)', padding: '8px 12px',
                           fontSize: 12, fontWeight: 700, color: '#c084fc',
                           borderBottom: '2px solid rgba(123,63,160,0.3)',
                         }}>
                           Team Average
                         </td>
+                        {teamAvgByMonth.map((avg, i) => {
+                          const isLatest = i === teamAvgByMonth.length - 1;
+                          return (
+                            <td key={i} style={{
+                              position: 'sticky', top: 42, zIndex: 20,
+                              background: isLatest ? 'rgba(46,204,138,0.05)' : 'rgba(13,26,19,0.95)',
+                              padding: '8px 4px', textAlign: 'center',
+                              borderBottom: '2px solid rgba(123,63,160,0.3)',
+                            }}>
+                              {avg != null
+                                ? <span style={{ color: getColor(avg).color, fontWeight: 700, fontSize: 13 }}>{avg.toFixed(1)}%</span>
+                                : <span style={{ color: 'var(--text-dim)' }}>—</span>}
+                            </td>
+                          );
+                        })}
                         <td style={{
                           position: 'sticky', top: 42, zIndex: 20,
-                          background: 'rgba(123,63,160,0.08)', padding: '10px 14px',
+                          background: 'rgba(123,63,160,0.08)', padding: '8px 6px',
                           textAlign: 'center', borderBottom: '2px solid rgba(123,63,160,0.3)',
                         }}>
                           {(() => {
@@ -735,21 +796,20 @@ export default function SalesFigures() {
                             return <span style={{ color: c.color, fontWeight: 700, fontSize: 13 }}>{overall.toFixed(1)}%</span>;
                           })()}
                         </td>
-                        {teamAvgByMonth.map((avg, i) => {
-                          const isLatest = i === teamAvgByMonth.length - 1;
-                          return (
-                            <td key={i} style={{
-                              position: 'sticky', top: 42, zIndex: 20,
-                              background: isLatest ? 'rgba(46,204,138,0.05)' : 'rgba(13,26,19,0.95)',
-                              padding: '10px 14px', textAlign: 'center',
-                              borderBottom: '2px solid rgba(123,63,160,0.3)',
-                            }}>
-                              {avg != null
-                                ? <span style={{ color: getColor(avg).color, fontWeight: 700, fontSize: 13 }}>{avg.toFixed(1)}%</span>
-                                : <span style={{ color: 'var(--text-dim)' }}>—</span>}
-                            </td>
-                          );
-                        })}
+                        <td style={{
+                          position: 'sticky', top: 42, zIndex: 20,
+                          background: 'rgba(46,204,138,0.04)', padding: '8px 6px',
+                          textAlign: 'center', borderBottom: '2px solid rgba(123,63,160,0.3)',
+                        }}>
+                          {(() => {
+                            const last3 = monthsWithData.slice(-3);
+                            const vals = last3.map(mk => {
+                              const avgs = visibleAgents.map(a => formatPct(figuresMap[mk]?.[a.agentCode])).filter(v => v != null);
+                              return avgs.length ? avgs.reduce((a, b) => a + b, 0) / avgs.length : null;
+                            });
+                            return <MiniTrend values={vals} />;
+                          })()}
+                        </td>
                       </tr>
                     )}
                   </thead>
@@ -775,7 +835,7 @@ export default function SalesFigures() {
                           <td style={{
                             position: 'sticky', left: 0, zIndex: 10,
                             background: even ? 'rgba(27,58,45,0.5)' : 'rgba(27,58,45,0.3)',
-                            padding: '11px 16px',
+                            padding: '8px 12px',
                             borderBottom: '1px solid rgba(216,245,236,0.04)',
                           }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -788,35 +848,46 @@ export default function SalesFigures() {
                                   Hidden
                                 </span>
                               )}
-                              <button
-                                onClick={() => openCoachingModal(agent)}
-                                style={{
-                                  background: 'transparent', border: 'none',
-                                  fontWeight: 600, color: hidden ? 'var(--text-dim)' : 'var(--mint)', fontSize: 13,
-                                  cursor: 'pointer', padding: 0, font: 'inherit',
-                                  textDecoration: 'underline', textDecorationColor: 'rgba(46,204,138,0.3)', textUnderlineOffset: 3,
-                                }}
-                                title="Click to add coaching notes"
-                              >
-                                {agent.displayName || agent.agentCode || '—'}
-                              </button>
-                            </div>
-                          </td>
-
-                          {/* YTD Avg */}
-                          <td style={{
-                            padding: '11px 14px', textAlign: 'center',
-                            background: hidden ? 'rgba(27,58,45,0.15)' : 'rgba(123,63,160,0.06)',
-                            borderBottom: '1px solid rgba(216,245,236,0.04)',
-                          }}>
-                            {avg != null ? (
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                                <span style={{ color: avgColor.color, fontWeight: 700, fontSize: 13 }}>{avg.toFixed(1)}%</span>
-                                <MiniBar value={avg} />
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                <button
+                                  onClick={() => openCoachingModal(agent)}
+                                  style={{
+                                    background: 'transparent', border: 'none',
+                                    fontWeight: 600, color: hidden ? 'var(--text-dim)' : 'var(--mint)', fontSize: 13,
+                                    cursor: 'pointer', padding: 0, font: 'inherit',
+                                    textDecoration: 'underline', textDecorationColor: 'rgba(46,204,138,0.3)', textUnderlineOffset: 3,
+                                    textAlign: 'left',
+                                  }}
+                                  title="Click to add coaching notes"
+                                >
+                                  {agent.displayName || agent.agentCode || '—'}
+                                </button>
+                                {(() => {
+                                  const cn = coachingNotes[agent.agentCode] || {};
+                                  const statuses = cn.coachingStatus || [];
+                                  const STATUS_LABELS = {
+                                    coaching_needed: 'Coaching Needed',
+                                    coaching_done: 'Coaching Done',
+                                    '60_days_warning': '60 Days Warning',
+                                    in_60_days: 'In 60 Days',
+                                  };
+                                  const items = [
+                                    ...statuses.map(s => STATUS_LABELS[s] || s),
+                                    ...(cn.note ? [cn.note] : []),
+                                  ];
+                                  return items.map((item, i) => (
+                                    <span key={i} style={{
+                                      fontSize: 11, color: '#ff6b6b', fontWeight: 500,
+                                      lineHeight: 1.3, maxWidth: 160,
+                                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                      display: 'block',
+                                    }} title={item}>
+                                      {item}
+                                    </span>
+                                  ));
+                                })()}
                               </div>
-                            ) : (
-                              <span style={{ color: 'var(--text-dim)' }}>—</span>
-                            )}
+                            </div>
                           </td>
 
                           {/* Monthly values */}
@@ -827,7 +898,7 @@ export default function SalesFigures() {
                             const isLatest = mi === monthsWithData.length - 1;
                             return (
                               <td key={mk} style={{
-                                padding: '11px 14px', textAlign: 'center',
+                                padding: '8px 2px', textAlign: 'center',
                                 borderBottom: '1px solid rgba(216,245,236,0.04)',
                                 background: isLatest && !hidden ? 'rgba(46,204,138,0.03)' : 'transparent',
                               }}>
@@ -835,9 +906,9 @@ export default function SalesFigures() {
                                   <span style={{
                                     color: hidden ? 'var(--text-dim)' : c.color,
                                     fontWeight: hidden ? 400 : (v >= 95 || v < 75 ? 700 : 500),
-                                    fontSize: 13,
-                                    padding: '3px 8px',
-                                    borderRadius: 6,
+                                    fontSize: 12,
+                                    padding: '2px 5px',
+                                    borderRadius: 5,
                                     background: hidden ? 'transparent' : c.bg,
                                     display: 'inline-block',
                                   }}>
@@ -849,6 +920,35 @@ export default function SalesFigures() {
                               </td>
                             );
                           })}
+
+                          {/* YTD Avg */}
+                          <td style={{
+                            padding: '8px 6px', textAlign: 'center',
+                            background: hidden ? 'rgba(27,58,45,0.15)' : 'rgba(123,63,160,0.06)',
+                            borderBottom: '1px solid rgba(216,245,236,0.04)',
+                          }}>
+                            {avg != null ? (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                                <span style={{ color: avgColor.color, fontWeight: 700, fontSize: 12 }}>{avg.toFixed(1)}%</span>
+                                <MiniBar value={avg} />
+                              </div>
+                            ) : (
+                              <span style={{ color: 'var(--text-dim)' }}>—</span>
+                            )}
+                          </td>
+
+                          {/* 3 Months Trend */}
+                          <td style={{
+                            padding: '8px 4px', textAlign: 'center',
+                            background: hidden ? 'rgba(27,58,45,0.15)' : 'rgba(46,204,138,0.03)',
+                            borderBottom: '1px solid rgba(216,245,236,0.04)',
+                          }}>
+                            {(() => {
+                              const last3 = monthsWithData.slice(-3);
+                              const vals = last3.map(mk => formatPct(figuresMap[mk]?.[agent.agentCode]));
+                              return <MiniTrend values={vals} />;
+                            })()}
+                          </td>
                         </tr>
                       );
                     })}
@@ -1071,6 +1171,25 @@ export default function SalesFigures() {
               <p style={{ fontSize: 13, color: 'var(--text-mid)', marginBottom: 12 }}>
                 Agent: <strong style={{ color: 'var(--mint)' }}>{selectedAgentForModal.displayName || selectedAgentForModal.agentCode}</strong>
               </p>
+            </div>
+
+            {/* Note text */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 600, display: 'block', marginBottom: 6 }}>
+                Note
+              </label>
+              <textarea
+                value={coachingNoteText}
+                onChange={e => setCoachingNoteText(e.target.value)}
+                placeholder="Add a note for this agent..."
+                rows={3}
+                style={{
+                  width: '100%', boxSizing: 'border-box',
+                  background: 'rgba(13,26,19,0.7)', border: '1px solid var(--border)',
+                  borderRadius: 8, color: '#ff6b6b', padding: '8px 12px',
+                  fontSize: 13, fontFamily: 'inherit', resize: 'vertical', outline: 'none',
+                }}
+              />
             </div>
 
             {/* Checkboxes */}

@@ -9,6 +9,8 @@ import ActivationPerformance from './pages/ActivationPerformance';
 import LogisticsPerformance from './pages/LogisticsPerformance';
 import DeliveryPerformance from './pages/DeliveryPerformance';
 import Dashboard from './pages/Dashboard';
+import MonthlyPresentation from './pages/MonthlyPresentation';
+import SalesFigures from './pages/SalesFigures';
 
 export const AuthContext = createContext({ user: undefined });
 
@@ -113,6 +115,23 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/presentation"
+            element={
+              <ProtectedRoute>
+                <MonthlyPresentation />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/sales-figures"
+            element={
+              <ProtectedRoute>
+                <SalesFigures />
+              </ProtectedRoute>
+            }
+          />
+
           <Route
             path="/admin"
             element={

@@ -7,6 +7,7 @@ import {
   setDoc,
   updateDoc,
   deleteField,
+  deleteDoc,
   writeBatch,
   getDocs,
   onSnapshot,
@@ -1369,6 +1370,27 @@ export default function Admin() {
   const [mappingError, setMappingError]       = useState('');
   const [mappingLoadError, setMappingLoadError] = useState('');
   const [activeTab, setActiveTab] = useState('import');
+
+  // ─── Sales Figures state ─────────────────────────────────────────────────────
+  const [sfAgents, setSfAgents]         = useState([]);
+  const [sfMonthKeys, setSfMonthKeys]   = useState([]);   // sorted ["2026-01", ...]
+  const [sfFigures, setSfFigures]       = useState({});   // { monthKey: { agentId: val } }
+  const [sfLoading, setSfLoading]       = useState(false);
+  const [sfSaving, setSfSaving]         = useState(false);
+  const [sfError, setSfError]           = useState('');
+
+  // agent form
+  const [sfNewName, setSfNewName]       = useState('');
+  const [sfNewTabsId, setSfNewTabsId]   = useState('');
+  const [sfNewTL, setSfNewTL]           = useState('');
+  const [sfNewNotes, setSfNewNotes]     = useState('');
+  const [sfEditId, setSfEditId]         = useState(null); // agent being edited inline
+  const [sfEditForm, setSfEditForm]     = useState({ name: '', tabsId: '', tl: '', notes: '' }); // edit form values
+
+  // monthly data form
+  const [sfSelMonth, setSfSelMonth]     = useState('');   // currently selected month key
+  const [sfNewMonthKey, setSfNewMonthKey] = useState('');  // for adding a new month
+  const [sfDraft, setSfDraft]           = useState({});   // agentId → value string (draft for selected month)
   const [emailHistory, setEmailHistory]     = useState([]);
   const [emailHistoryLoading, setEmailHistoryLoading] = useState(false);
   const [expandedEmailStats, setExpandedEmailStats] = useState({});
@@ -1446,6 +1468,162 @@ export default function Admin() {
     } finally {
       setSlaSaving(false);
     }
+  }
+
+  // ─── Sales Figures helpers ───────────────────────────────────────────────────
+  // Now integrated with HR Report (hrAgents collection)
+  async function loadSalesFigures() {
+    setSfLoading(true);
+    setSfError('');
+    try {
+      // Load from hrAgents collection (HR Report data)
+      const agentsSnap = await getDocs(query(collection(db, 'hrAgents'), orderBy('name', 'asc')));
+      const agents = agentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setSfAgents(agents);
+      
+      // Extract all month keys from agent performance data
+      const monthKeysSet = new Set();
+      agents.forEach(agent => {
+        if (agent.performance) {
+          Object.keys(agent.performance).forEach(year => {
+            Object.keys(agent.performance[year]).forEach(month => {
+              const monthIdx = ['January','February','March','April','May','June','July','August','September','October','November','December'].indexOf(month);
+              if (monthIdx >= 0) {
+                monthKeysSet.add(`${year}-${String(monthIdx + 1).padStart(2, '0')}`);
+              }
+            });
+          });
+        }
+      });
+      const keys = Array.from(monthKeysSet).sort();
+      setSfMonthKeys(keys);
+      
+      // Build figures map from agent performance
+      const map = {};
+      keys.forEach(key => {
+        const [year, monthNum] = key.split('-');
+        const monthName = ['January','February','March','April','May','June','July','August','September','October','November','December'][parseInt(monthNum) - 1];
+        map[key] = {};
+        agents.forEach(agent => {
+          const val = agent.performance?.[year]?.[monthName];
+          if (val != null) {
+            map[key][agent.id] = val;
+          }
+        });
+      });
+      setSfFigures(map);
+    } catch (err) {
+      setSfError('Failed to load: ' + err.message);
+    }
+    setSfLoading(false);
+  }
+
+  async function sfAddAgent() {
+    if (!sfNewName.trim()) return;
+    setSfSaving(true);
+    setSfError('');
+    try {
+      // Use TABS ID as document ID if provided, otherwise generate one
+      const newId = sfNewTabsId.trim() || `agent_${Date.now()}`;
+      await setDoc(doc(db, 'hrAgents', newId), {
+        name: sfNewName.trim(),
+        tabsId: sfNewTabsId.trim() || null,
+        employeeId: null,
+        teamLeader: sfNewTL.trim() || 'Ali Mohsen',
+        notes: sfNewNotes.trim() || '',
+        visible: true,
+        performance: {},
+        importedAt: new Date().toISOString(),
+        source: 'manual_add',
+      });
+      setSfNewName(''); setSfNewTabsId(''); setSfNewTL(''); setSfNewNotes('');
+      await loadSalesFigures();
+    } catch (err) { setSfError('Save failed: ' + err.message); }
+    setSfSaving(false);
+  }
+
+  async function sfToggleVisible(agent) {
+    setSfError('');
+    try {
+      await updateDoc(doc(db, 'hrAgents', agent.id), { visible: !agent.visible });
+      setSfAgents(prev => prev.map(a => a.id === agent.id ? { ...a, visible: !a.visible } : a));
+    } catch (err) { setSfError('Update failed: ' + err.message); }
+  }
+
+  async function sfDeleteAgent(agent) {
+    if (!window.confirm(`Delete agent "${agent.name}"? This cannot be undone.`)) return;
+    setSfError('');
+    try {
+      await deleteDoc(doc(db, 'hrAgents', agent.id));
+      setSfAgents(prev => prev.filter(a => a.id !== agent.id));
+    } catch (err) { setSfError('Delete failed: ' + err.message); }
+  }
+
+  async function sfSaveAgentEdit(agent, patch) {
+    setSfError('');
+    try {
+      // Map field names to hrAgents schema
+      const mappedPatch = {
+        name: patch.name,
+        tabsId: patch.tabsId || null,
+        teamLeader: patch.tl || 'Ali Mohsen',
+        notes: patch.notes || '',
+      };
+      await updateDoc(doc(db, 'hrAgents', agent.id), mappedPatch);
+      setSfAgents(prev => prev.map(a => a.id === agent.id ? { ...a, ...mappedPatch } : a));
+      setSfEditId(null);
+    } catch (err) { setSfError('Save failed: ' + err.message); }
+  }
+
+  async function sfSaveFigures() {
+    if (!sfSelMonth) return;
+    setSfSaving(true);
+    setSfError('');
+    try {
+      // Parse the month key (e.g., "2025-03")
+      const [year, monthNum] = sfSelMonth.split('-');
+      const monthName = ['January','February','March','April','May','June','July','August','September','October','November','December'][parseInt(monthNum) - 1];
+      
+      // Update each agent's performance data in hrAgents collection
+      const updatePromises = [];
+      sfAgents.forEach(a => {
+        const raw = sfDraft[a.id];
+        if (raw != null && raw !== '') {
+          const n = parseFloat(raw);
+          const value = isNaN(n) ? null : n;
+          if (value !== null) {
+            // Update the agent's performance
+            const agentRef = doc(db, 'hrAgents', a.id);
+            const updatePath = `performance.${year}.${monthName}`;
+            updatePromises.push(updateDoc(agentRef, { [updatePath]: value }));
+          }
+        }
+      });
+      
+      await Promise.all(updatePromises);
+      
+      // Refresh data
+      await loadSalesFigures();
+    } catch (err) { setSfError('Save failed: ' + err.message); }
+    setSfSaving(false);
+  }
+
+  async function sfAddMonth() {
+    const key = sfNewMonthKey.trim();
+    if (!key.match(/^\d{4}-\d{2}$/)) { setSfError('Month key must be YYYY-MM (e.g. 2026-04)'); return; }
+    if (sfMonthKeys.includes(key)) { setSfError('Month already exists.'); return; }
+    setSfSaving(true);
+    setSfError('');
+    try {
+      // For hrAgents, we just add the month to the list - no separate collection needed
+      const newKeys = [...sfMonthKeys, key].sort();
+      setSfMonthKeys(newKeys);
+      setSfFigures(prev => ({ ...prev, [key]: {} }));
+      setSfSelMonth(key);
+      setSfDraft({});
+      setSfNewMonthKey('');
+    } catch (err) { setSfError('Failed: ' + err.message); }
+    setSfSaving(false);
   }
 
   async function loadEmailSettings() {
@@ -2216,6 +2394,7 @@ export default function Admin() {
           >
             Delivery Upload
           </button>
+
         </div>
 
         {activeTab === 'import' && (
@@ -2673,6 +2852,8 @@ export default function Admin() {
         {activeTab === 'delivery' && (
           <DeliveryUploadTab />
         )}
+
+
       </div>
     </>
   );

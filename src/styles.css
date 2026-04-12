@@ -3176,3 +3176,237 @@ td {
     color: #6b7280 !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   MONTHLY PRESENTATION PAGE
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+.pres-preview-card {
+  position: relative;
+  background: #ffffff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+  margin-top: 20px;
+  aspect-ratio: 16 / 9;
+  max-width: 1000px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.pres-left-stripe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 18px;
+  height: 100%;
+  background: linear-gradient(180deg, #87CEEB 0%, #7B3FA0 100%);
+}
+
+.pres-preview-inner {
+  padding: 24px 28px 16px 36px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pres-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #333;
+  margin: 0 0 2px 0;
+  font-family: Arial, sans-serif;
+}
+
+.pres-subtitle {
+  font-size: 13px;
+  color: #888;
+  margin: 0 0 14px 0;
+  font-family: Arial, sans-serif;
+}
+
+/* ── Section 1: Counts Hero ── */
+.pres-counts-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  margin-bottom: 14px;
+}
+
+.pres-count-box {
+  text-align: center;
+  padding: 10px 28px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.02);
+  border: 1.5px solid rgba(0,0,0,0.06);
+}
+
+.pres-count-value {
+  font-size: 32px;
+  font-weight: 800;
+  font-family: Arial, sans-serif;
+  line-height: 1.1;
+}
+
+.pres-count-label {
+  font-size: 12px;
+  color: #888;
+  font-family: Arial, sans-serif;
+  margin-top: 2px;
+}
+
+.pres-count-divider {
+  width: 1px;
+  height: 40px;
+  background: #ddd;
+}
+
+/* ── Section Labels ── */
+.pres-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+  font-family: Arial, sans-serif;
+}
+
+/* ── Section 2: Averages Timeline ── */
+.pres-timeline-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.pres-timeline-line {
+  position: absolute;
+  top: 24px;
+  left: 10%;
+  right: 10%;
+  height: 3px;
+  background: #ccc;
+  z-index: 0;
+}
+
+.pres-timeline-nodes {
+  display: flex;
+  justify-content: space-around;
+  position: relative;
+  z-index: 1;
+}
+
+.pres-timeline-3 {
+  justify-content: space-evenly;
+}
+
+.pres-timeline-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 28%;
+}
+
+.pres-arrow {
+  margin-bottom: 6px;
+}
+.pres-arrow svg {
+  width: 24px;
+  height: 24px;
+}
+
+.pres-node-connector {
+  width: 2px;
+  height: 12px;
+  background: #ccc;
+  margin-bottom: 4px;
+}
+
+.pres-circle {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 2.5px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  margin-bottom: 8px;
+}
+.pres-circle svg {
+  width: 22px;
+  height: 22px;
+}
+
+.pres-node-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 1px;
+  font-family: Arial, sans-serif;
+}
+
+.pres-node-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #333;
+  text-align: center;
+  margin-bottom: 2px;
+  font-family: Arial, sans-serif;
+}
+
+.pres-node-desc {
+  font-size: 10px;
+  color: #888;
+  text-align: center;
+  line-height: 1.3;
+  white-space: pre-line;
+  font-family: Arial, sans-serif;
+}
+
+/* ── Section 3: Delivery ── */
+.pres-delivery-row {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 8px;
+}
+
+.pres-delivery-box {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: #f0faf8;
+  border: 1.5px solid #b2dfdb;
+}
+
+.pres-delivery-icon {
+  flex-shrink: 0;
+}
+
+.pres-delivery-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #00897B;
+  font-family: Arial, sans-serif;
+}
+
+.pres-delivery-label {
+  font-size: 10px;
+  color: #888;
+  font-family: Arial, sans-serif;
+}
+
+.pres-logo {
+  margin-top: auto;
+  padding-top: 6px;
+}
+.pres-logo img {
+  height: 28px;
+  width: auto;
+}

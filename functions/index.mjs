@@ -2175,3 +2175,115 @@ export const downloadPDF = onRequest(
     res.send(pdfBuffer);
   }
 );
+
+// ─── HTTP: UPDATE HR AGENT DATA ─────────────────────────────────────────────────
+// Updates HR report data (agent performance percentages) in the hrAgents collection
+export const updateHRData = onRequest(
+  { cors: true, invoker: 'public', memory: '256MiB', timeoutSeconds: 60, region: 'us-central1' },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') { res.status(204).send(''); return; }
+    if (req.method !== 'POST')    { res.status(405).json({ error: 'Method not allowed' }); return; }
+
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    try { await getAuth().verifyIdToken(token); } catch { res.status(401).json({ error: 'Invalid token' }); return; }
+
+    const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 
+                         'July', 'August', 'September', 'October', 'November', 'December'];
+
+    function parseMonthYear(str) {
+      const monthMap = {
+        'jan': 0, 'feb': 1, 'mar': 2, 'apr': 3, 'may': 4, 'jun': 5,
+        'jul': 6, 'aug': 7, 'sep': 8, 'oct': 9, 'nov': 10, 'dec': 11
+      };
+      const parts = str.trim().split('-');
+      if (parts.length !== 2) return null;
+      const monthAbbrev = parts[0].toLowerCase().slice(0, 3);
+      const yearShort = parseInt(parts[1], 10);
+      const month = monthMap[monthAbbrev];
+      if (month === undefined || isNaN(yearShort)) return null;
+      const year = yearShort < 50 ? 2000 + yearShort : 1900 + yearShort;
+      return { month: MONTH_NAMES[month], year: year.toString() };
+    }
+
+    // Agent data from request body
+    const agentData = req.body?.agents;
+    if (!agentData || !Array.isArray(agentData)) {
+      res.status(400).json({ error: 'Missing agents array in request body' });
+      return;
+    }
+
+    const results = [];
+
+    for (const agent of agentData) {
+      const docId = agent.id;
+      if (!docId) {
+        results.push({ id: null, name: agent.name, status: 'skipped', error: 'Missing agent ID' });
+        continue;
+      }
+
+      const docRef = db.collection('hrAgents').doc(docId);
+      
+      // Build performance object
+      const performance = {};
+      if (agent.data && typeof agent.data === 'object') {
+        for (const [monthYear, value] of Object.entries(agent.data)) {
+          const parsed = parseMonthYear(monthYear);
+          if (!parsed) continue;
+          const { year, month } = parsed;
+          if (!performance[year]) performance[year] = {};
+          performance[year][month] = value;
+        }
+      }
+
+      try {
+        const docSnap = await docRef.get();
+        
+        if (docSnap.exists) {
+          // Update existing document - merge performance data
+          const existingData = docSnap.data();
+          const existingPerformance = existingData.performance || {};
+          
+          // Merge new performance data with existing
+          const mergedPerformance = { ...existingPerformance };
+          for (const [year, months] of Object.entries(performance)) {
+            if (!mergedPerformance[year]) mergedPerformance[year] = {};
+            for (const [month, value] of Object.entries(months)) {
+              mergedPerformance[year][month] = value;
+            }
+          }
+          
+          await docRef.update({
+            performance: mergedPerformance,
+            name: agent.name || existingData.name,
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedBy: 'updateHRData-function'
+          });
+          results.push({ id: docId, name: agent.name, status: 'updated' });
+        } else {
+          // Create new document
+          await docRef.set({
+            name: agent.name || docId,
+            employeeId: agent.id,
+            tabsId: agent.id,
+            visible: true,
+            teamLeader: 'Ali Mohsen',
+            performance: performance,
+            importedAt: new Date().toISOString(),
+            source: 'updateHRData-function'
+          });
+          results.push({ id: docId, name: agent.name, status: 'created' });
+        }
+      } catch (err) {
+        results.push({ id: docId, name: agent.name, status: 'error', error: err.message });
+      }
+    }
+
+    res.status(200).json({ success: true, results });
+  }
+);
