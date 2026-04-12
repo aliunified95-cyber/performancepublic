@@ -76,6 +76,18 @@ export default function Navbar({ activeLink }) {
           Delivery
         </Link>
         <Link
+          to="/presentation"
+          className={`nav-link${activeLink === 'presentation' ? ' active' : ''}`}
+        >
+          Presentation
+        </Link>
+        <Link
+          to="/sales-figures"
+          className={`nav-link${activeLink === 'sales-figures' ? ' active' : ''}`}
+        >
+          Sales Figures
+        </Link>
+        <Link
           to="/admin"
           className={`nav-link${activeLink === 'admin' ? ' active' : ''}`}
         >
