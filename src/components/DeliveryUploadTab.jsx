@@ -8,6 +8,7 @@ import {
   getDocs,
   query,
   orderBy,
+  where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -205,19 +206,43 @@ async function writeDeliveryData(rows, onProgress) {
     if (data.orderNo) logisticsOrderMap[data.orderNo] = data;
   });
   const matchedCount = logisticsSnap.docs.length;
-  onProgress(`Matched ${matchedCount.toLocaleString()} logistics orders — clearing old data…`, 10);
+  onProgress(`Matched ${matchedCount.toLocaleString()} logistics orders — detecting upload months…`, 10);
 
-  // Step 2: clear previous delivery data
-  const existing = await getDocs(query(collection(db, 'deliveryShipments')));
-  let cleared = 0;
-  while (cleared < existing.docs.length) {
-    const batch = writeBatch(db);
-    existing.docs.slice(cleared, cleared + BATCH_SIZE).forEach(d => batch.delete(d.ref));
-    await batch.commit();
-    cleared += BATCH_SIZE;
+  // Step 2: detect which months are in the uploaded file
+  const monthSet = new Set();
+  rows.forEach(row => {
+    const d = parseDateTime(
+      row['Pickup Date (Creation Date)'],
+      row['Pickup Time (Creation Time)'],
+    );
+    if (d) {
+      monthSet.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+  });
+
+  // Step 3: delete existing records only for those months (preserves other months)
+  for (const ym of monthSet) {
+    const [year, month] = ym.split('-').map(Number);
+    const start = new Date(year, month - 1, 1);
+    const end   = new Date(year, month, 1);
+    const existing = await getDocs(
+      query(
+        collection(db, 'deliveryShipments'),
+        where('shipmentDate', '>=', Timestamp.fromDate(start)),
+        where('shipmentDate', '<',  Timestamp.fromDate(end)),
+      )
+    );
+    let cleared = 0;
+    while (cleared < existing.docs.length) {
+      const batch = writeBatch(db);
+      existing.docs.slice(cleared, cleared + BATCH_SIZE).forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      cleared += BATCH_SIZE;
+    }
   }
+  onProgress('Old data cleared for upload month(s) — writing new records…', 15);
 
-  // Step 3: transform and write
+  // Step 4: transform and write
   const total = rows.length;
   let written = 0;
   while (written < total) {
@@ -237,7 +262,7 @@ async function writeDeliveryData(rows, onProgress) {
     );
   }
 
-  // Step 4: save import metadata
+  // Step 5: save import metadata
   const metaBatch = writeBatch(db);
   metaBatch.set(doc(collection(db, 'deliveryImports')), {
     rowCount:   total,
