@@ -68,6 +68,8 @@ function DayDetailModal({ isOpen, onClose, dayData }) {
     const avgDeliveryTimeSec = Math.round(avg(
       shipments.filter(s => s.status === 'delivered').map(s => s.deliveryTimeSec)
     ));
+    const firstAttemptWithin3h = shipments.filter(s => s.awbToFirstAttemptSec > 0 && s.awbToFirstAttemptSec <= 10800).length;
+    const deliveredWithin3h    = shipments.filter(s => s.status === 'delivered' && s.deliveryTimeSec > 0 && s.deliveryTimeSec <= 10800).length;
 
     // Problem code breakdown — collect ALL problem codes from ALL attempt columns
     // for ALL shipments (includes failed attempts even on ultimately-delivered orders)
@@ -84,7 +86,7 @@ function DayDetailModal({ isOpen, onClose, dayData }) {
       .sort((a, b) => b[1] - a[1])
       .map(([code, count]) => ({ code, count, pct: pct(count, totalProblems) }));
 
-    return { created, delivered, undelivered, attempt1, attempt2, attempt3plus, avgDeliveryTimeSec, problemBreakdown, totalProblems };
+    return { created, delivered, undelivered, attempt1, attempt2, attempt3plus, avgDeliveryTimeSec, problemBreakdown, totalProblems, firstAttemptWithin3h, deliveredWithin3h };
   }, [dayData]);
 
   if (!isOpen || !dayData || !stats) return null;
@@ -170,6 +172,32 @@ function DayDetailModal({ isOpen, onClose, dayData }) {
                 {sub && <div style={{ fontSize: '11px', color: 'rgba(216,245,236,0.4)', marginTop: '3px' }}>{sub}</div>}
               </div>
             ))}
+          </div>
+
+          {/* 3-Hour KPI cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+            <div style={{ background: 'rgba(0,188,212,0.07)', borderRadius: '10px', padding: '14px', border: '1px solid rgba(0,188,212,0.2)' }}>
+              <div style={{ fontSize: '11px', color: 'rgba(0,188,212,0.7)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
+                1st Attempt Within 3 hrs · KPI
+              </div>
+              <div style={{ fontSize: '26px', fontWeight: 700, color: '#00BCD4' }}>
+                {pct(stats.firstAttemptWithin3h, stats.created)}%
+              </div>
+              <div style={{ fontSize: '13px', color: 'rgba(216,245,236,0.4)', marginTop: '3px' }}>
+                {stats.firstAttemptWithin3h.toLocaleString()} of {stats.created.toLocaleString()} orders
+              </div>
+            </div>
+            <div style={{ background: 'rgba(46,204,138,0.07)', borderRadius: '10px', padding: '14px', border: '1px solid rgba(46,204,138,0.2)' }}>
+              <div style={{ fontSize: '11px', color: 'rgba(46,204,138,0.7)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
+                Delivered Within 3 hrs · KPI
+              </div>
+              <div style={{ fontSize: '26px', fontWeight: 700, color: 'var(--emerald)' }}>
+                {pct(stats.deliveredWithin3h, stats.created)}%
+              </div>
+              <div style={{ fontSize: '13px', color: 'rgba(216,245,236,0.4)', marginTop: '3px' }}>
+                {stats.deliveredWithin3h.toLocaleString()} of {stats.created.toLocaleString()} orders
+              </div>
+            </div>
           </div>
 
           {/* Attempt breakdown */}
@@ -308,6 +336,7 @@ function HeroBadge({ stats, periodLabel }) {
     created, delivered, undelivered,
     attempt1, attempt2, attempt3plus,
     avgDeliveryTimeSec, avgAwbToFirstAttemptSec,
+    firstAttemptWithin3h, deliveredWithin3h,
   } = stats;
 
   const deliveryRate   = pct(delivered, created);
@@ -410,6 +439,51 @@ function HeroBadge({ stats, periodLabel }) {
           </div>
         ))}
       </div>
+
+      {/* 3-Hour KPI row */}
+      <div className="hero-kpis" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginTop: '12px' }}>
+        {/* 1st attempt within 3h */}
+        <div className="hero-kpi" style={{ borderTop: '2px solid rgba(0,188,212,0.25)', paddingTop: '14px' }}>
+          <div className="hero-kpi-icon" style={{ background: 'rgba(0,188,212,0.15)' }}>
+            <svg viewBox="0 0 24 24" style={{ stroke: '#00BCD4' }} fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+              <polyline points="9 17 12 14 15 17" strokeWidth="1.5"/>
+            </svg>
+          </div>
+          <div className="hero-kpi-value" style={{ color: '#00BCD4' }}>
+            {pct(firstAttemptWithin3h, created)}%
+          </div>
+          <div style={{ fontSize: '14px', fontWeight: 600, color: 'rgba(216,245,236,0.5)', marginTop: '2px' }}>
+            {firstAttemptWithin3h.toLocaleString()} orders
+          </div>
+          <div className="hero-kpi-label">1st Attempt Within 3 hrs</div>
+          <span className="hero-kpi-badge" style={{ background: 'rgba(0,188,212,0.12)', color: '#00BCD4' }}>
+            AWB creation → 1st attempt ≤ 3h · KPI target
+          </span>
+        </div>
+
+        {/* Delivered within 3h */}
+        <div className="hero-kpi" style={{ borderTop: '2px solid rgba(46,204,138,0.3)', paddingTop: '14px' }}>
+          <div className="hero-kpi-icon" style={{ background: 'rgba(46,204,138,0.15)' }}>
+            <svg viewBox="0 0 24 24" style={{ stroke: 'var(--emerald)' }} fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+              <polyline points="8 12 10 14 16 8" strokeWidth="2"/>
+            </svg>
+          </div>
+          <div className="hero-kpi-value" style={{ color: 'var(--emerald)' }}>
+            {pct(deliveredWithin3h, created)}%
+          </div>
+          <div style={{ fontSize: '14px', fontWeight: 600, color: 'rgba(216,245,236,0.5)', marginTop: '2px' }}>
+            {deliveredWithin3h.toLocaleString()} orders
+          </div>
+          <div className="hero-kpi-label">Delivered Within 3 hrs</div>
+          <span className="hero-kpi-badge" style={{ background: 'rgba(46,204,138,0.12)', color: 'var(--emerald)' }}>
+            AWB creation → delivery ≤ 3h · KPI target
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -445,6 +519,8 @@ function DailyBreakdown({ rows, onRowClick }) {
     { key: 'attempt3plus',       label: '3rd+ Attempt' },
     { key: 'avgDeliveryTimeSec',      label: 'Avg Delivery Time' },
     { key: 'avgAwbToFirstAttemptSec', label: 'Avg AWB → 1st Attempt' },
+    { key: 'firstAttemptWithin3h',    label: '1st Attempt ≤ 3h' },
+    { key: 'deliveredWithin3h',       label: 'Delivered ≤ 3h' },
   ];
 
   return (
@@ -475,7 +551,7 @@ function DailyBreakdown({ rows, onRowClick }) {
           <tbody>
             {sorted.length === 0 ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
+                <td colSpan={12} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '32px' }}>
                   No daily data available
                 </td>
               </tr>
@@ -529,6 +605,18 @@ function DailyBreakdown({ rows, onRowClick }) {
                   <td className="num-cell">{fmtTime(row.avgDeliveryTimeSec)}</td>
                   <td className="num-cell" style={{ color: row.avgAwbToFirstAttemptSec > 0 ? '#00BCD4' : 'var(--text-dim)' }}>
                     {fmtTime(row.avgAwbToFirstAttemptSec)}
+                  </td>
+                  <td className="num-cell" style={{ color: '#00BCD4' }}>
+                    {pct(row.firstAttemptWithin3h, row.created)}%
+                    <span style={{ color: 'var(--text-dim)', fontSize: '11px', display: 'block' }}>
+                      {row.firstAttemptWithin3h.toLocaleString()}
+                    </span>
+                  </td>
+                  <td className="num-cell" style={{ color: 'var(--emerald)' }}>
+                    {pct(row.deliveredWithin3h, row.created)}%
+                    <span style={{ color: 'var(--text-dim)', fontSize: '11px', display: 'block' }}>
+                      {row.deliveredWithin3h.toLocaleString()}
+                    </span>
                   </td>
                 </tr>
               );
@@ -607,7 +695,9 @@ export default function DeliveryPerformance() {
     const attempt3plus  = filteredShipments.filter(s => s.status === 'delivered' && s.attempt >= 3).length;
     const avgDeliveryTimeSec      = Math.round(avg(filteredShipments.filter(s => s.status === 'delivered').map(s => s.deliveryTimeSec)));
     const avgAwbToFirstAttemptSec = Math.round(avg(filteredShipments.map(s => s.awbToFirstAttemptSec).filter(v => v != null)));
-    return { created, delivered, undelivered, attempt1, attempt2, attempt3plus, avgDeliveryTimeSec, avgAwbToFirstAttemptSec };
+    const firstAttemptWithin3h    = filteredShipments.filter(s => s.awbToFirstAttemptSec > 0 && s.awbToFirstAttemptSec <= 10800).length;
+    const deliveredWithin3h       = filteredShipments.filter(s => s.status === 'delivered' && s.deliveryTimeSec > 0 && s.deliveryTimeSec <= 10800).length;
+    return { created, delivered, undelivered, attempt1, attempt2, attempt3plus, avgDeliveryTimeSec, avgAwbToFirstAttemptSec, firstAttemptWithin3h, deliveredWithin3h };
   }, [filteredShipments]);
 
   // Daily breakdown rows — include raw shipments per day for modal
@@ -618,7 +708,7 @@ export default function DeliveryPerformance() {
       const d = s.shipmentDate;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
       if (!byDate[key]) {
-        byDate[key] = { date: key, created: 0, delivered: 0, undelivered: 0, attempt1: 0, attempt2: 0, attempt3plus: 0, deliveryTimes: [], firstAttemptTimes: [], shipments: [] };
+        byDate[key] = { date: key, created: 0, delivered: 0, undelivered: 0, attempt1: 0, attempt2: 0, attempt3plus: 0, firstAttemptWithin3h: 0, deliveredWithin3h: 0, deliveryTimes: [], firstAttemptTimes: [], shipments: [] };
       }
       const row = byDate[key];
       row.created++;
@@ -629,10 +719,12 @@ export default function DeliveryPerformance() {
         else if (s.attempt === 2) row.attempt2++;
         else if (s.attempt >= 3) row.attempt3plus++;
         if (s.deliveryTimeSec > 0) row.deliveryTimes.push(s.deliveryTimeSec);
+        if (s.deliveryTimeSec > 0 && s.deliveryTimeSec <= 10800) row.deliveredWithin3h++;
       } else {
         row.undelivered++;
       }
       if (s.awbToFirstAttemptSec > 0) row.firstAttemptTimes.push(s.awbToFirstAttemptSec);
+      if (s.awbToFirstAttemptSec > 0 && s.awbToFirstAttemptSec <= 10800) row.firstAttemptWithin3h++;
     });
     return Object.values(byDate).map(r => ({
       ...r,

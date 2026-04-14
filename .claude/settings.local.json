@@ -20,7 +20,9 @@
       "Bash(npx -y firebase-tools@latest use)",
       "Bash(npx -y firebase-tools@latest deploy --only functions)",
       "Bash(npx eslint:*)",
-      "Bash(npx vite:*)"
+      "Bash(npx vite:*)",
+      "Bash(node -e ':*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
