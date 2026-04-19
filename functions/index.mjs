@@ -1871,63 +1871,64 @@ export const autoImportCsv = onRequest(
       return;
     }
 
+    // Acknowledge immediately so the caller (Apps Script / Zapier) does not time out.
+    // All heavy processing runs in the background after the response is sent.
+    const bodySnapshot = req.body;
+    res.status(202).json({ success: true, message: 'Import accepted — processing in background' });
+
+    // ── Background processing (runs after 202 is sent) ────────────────────────
     try {
       // ── Main file ──────────────────────────────────────────────────────────
-      let csvText = req.body?.csv || req.body?.text;
-      const filename = req.body?.filename || req.query?.filename || `auto-import-${new Date().toISOString()}.csv`;
+      let csvText = bodySnapshot?.csv || bodySnapshot?.text;
+      const filename = bodySnapshot?.filename || `auto-import-${new Date().toISOString()}.csv`;
 
-      if (!csvText && req.body?.url) {
-        const response = await fetch(req.body.url);
+      if (!csvText && bodySnapshot?.url) {
+        const response = await fetch(bodySnapshot.url);
         if (!response.ok) throw new Error(`Failed to fetch CSV from URL: ${response.status}`);
         csvText = await response.text();
       }
 
       // Fallback: raw body
-      if (!csvText) csvText = typeof req.body === 'string' ? req.body : null;
+      if (!csvText) csvText = typeof bodySnapshot === 'string' ? bodySnapshot : null;
 
       if (!csvText || typeof csvText !== 'string') {
-        res.status(400).json({ error: 'Missing CSV content. Send url, csv, or raw text in the body.' });
+        console.error('[autoImportCsv] Missing CSV content in background processing');
         return;
       }
 
       // ── Second file (portal / manually-created orders) — optional ──────────
-      // Accepted as: url2 (fetched server-side), csv2, or text2
-      let csvText2 = req.body?.csv2 || req.body?.text2 || null;
-      const filename2 = req.body?.filename2 || null;
+      let csvText2 = bodySnapshot?.csv2 || bodySnapshot?.text2 || null;
+      const filename2 = bodySnapshot?.filename2 || null;
 
-      if (!csvText2 && req.body?.url2) {
-        const res2 = await fetch(req.body.url2);
+      if (!csvText2 && bodySnapshot?.url2) {
+        const res2 = await fetch(bodySnapshot.url2);
         if (!res2.ok) throw new Error(`Failed to fetch portal CSV from url2: ${res2.status}`);
         csvText2 = await res2.text();
       }
 
       const result = await runImport(csvText, filename, csvText2, filename2);
 
-      // Immediately send reports after import — don't wait for the scheduled function
-      // Guard: only send if emails haven't been sent today already
+      // Guard: only send emails once per day
       const todayKey = new Date().toISOString().slice(0, 10);
       const pendingRef = db.collection('pendingReports').doc(todayKey);
       const pendingDoc = await pendingRef.get();
       const alreadySentToday = pendingDoc.exists && pendingDoc.data().sent === true;
-      
+
       if (!alreadySentToday) {
         try {
           await sendAllReports(result.importId);
           await pendingRef.set({ sent: true, sentAt: FieldValue.serverTimestamp() }, { merge: true });
+          console.log(`[autoImportCsv] Reports sent for ${todayKey}`);
         } catch (emailErr) {
           console.error('Auto-import: failed to send reports:', emailErr);
-          result.emailError = emailErr.message;
         }
       } else {
-        console.log(`[autoImportCsv] Emails were already sent today (${todayKey}) — skipping send.`);
-        result.emailSkipped = true;
-        result.emailSkippedReason = 'Emails were already sent today';
+        console.log(`[autoImportCsv] Emails already sent today (${todayKey}) — skipping.`);
       }
 
-      res.status(200).json({ success: true, result });
+      console.log(`[autoImportCsv] Background import complete — ${result.rowCount} rows`);
     } catch (err) {
-      console.error('Auto-import error:', err);
-      res.status(500).json({ success: false, error: err.message });
+      console.error('Auto-import background error:', err);
     }
   }
 );
