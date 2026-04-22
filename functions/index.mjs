@@ -1849,6 +1849,7 @@ export const autoImportCsv = onRequest(
     timeoutSeconds: 540,
     maxInstances: 1,
     region: 'us-central1',
+    cpu: 1,
   },
   async (req, res) => {
     if (req.method === 'OPTIONS') {
@@ -1871,64 +1872,60 @@ export const autoImportCsv = onRequest(
       return;
     }
 
-    // Acknowledge immediately so the caller (Apps Script / Zapier) does not time out.
-    // All heavy processing runs in the background after the response is sent.
-    const bodySnapshot = req.body;
-    res.status(202).json({ success: true, message: 'Import accepted — processing in background' });
-
-    // ── Background processing (runs after 202 is sent) ────────────────────────
+    // Process synchronously — ensures all Firestore writes complete before responding.
+    // Email sending is handled by the processPendingReports scheduled function.
     try {
-      // ── Main file ──────────────────────────────────────────────────────────
-      let csvText = bodySnapshot?.csv || bodySnapshot?.text;
-      const filename = bodySnapshot?.filename || `auto-import-${new Date().toISOString()}.csv`;
+      // ── Main file ────────────────────────────────────────────────────────────
+      let csvText = req.body?.csv || req.body?.text;
+      const filename = req.body?.filename || `auto-import-${new Date().toISOString()}.csv`;
 
-      if (!csvText && bodySnapshot?.url) {
-        const response = await fetch(bodySnapshot.url);
-        if (!response.ok) throw new Error(`Failed to fetch CSV from URL: ${response.status}`);
-        csvText = await response.text();
+      if (!csvText && req.body?.url) {
+        const urlRes = await fetch(req.body.url);
+        if (!urlRes.ok) throw new Error(`Failed to fetch CSV from URL: ${urlRes.status}`);
+        csvText = await urlRes.text();
       }
 
-      // Fallback: raw body
-      if (!csvText) csvText = typeof bodySnapshot === 'string' ? bodySnapshot : null;
+      if (!csvText) csvText = typeof req.body === 'string' ? req.body : null;
 
       if (!csvText || typeof csvText !== 'string') {
-        console.error('[autoImportCsv] Missing CSV content in background processing');
+        res.status(400).json({ error: 'Missing CSV content' });
         return;
       }
 
-      // ── Second file (portal / manually-created orders) — optional ──────────
-      let csvText2 = bodySnapshot?.csv2 || bodySnapshot?.text2 || null;
-      const filename2 = bodySnapshot?.filename2 || null;
+      // ── Second file (portal / manually-created orders) — optional ────────────
+      let csvText2 = req.body?.csv2 || req.body?.text2 || null;
+      const filename2 = req.body?.filename2 || null;
 
-      if (!csvText2 && bodySnapshot?.url2) {
-        const res2 = await fetch(bodySnapshot.url2);
-        if (!res2.ok) throw new Error(`Failed to fetch portal CSV from url2: ${res2.status}`);
-        csvText2 = await res2.text();
+      if (!csvText2 && req.body?.url2) {
+        const urlRes2 = await fetch(req.body.url2);
+        if (!urlRes2.ok) throw new Error(`Failed to fetch portal CSV from url2: ${urlRes2.status}`);
+        csvText2 = await urlRes2.text();
       }
 
       const result = await runImport(csvText, filename, csvText2, filename2);
+      console.log(`[autoImportCsv] Import complete — ${result.rowCount} rows`);
 
-      // Guard: only send emails once per day
+      // Send emails synchronously (same request, guaranteed to complete)
       const todayKey = new Date().toISOString().slice(0, 10);
       const pendingRef = db.collection('pendingReports').doc(todayKey);
       const pendingDoc = await pendingRef.get();
       const alreadySentToday = pendingDoc.exists && pendingDoc.data().sent === true;
-
       if (!alreadySentToday) {
         try {
           await sendAllReports(result.importId);
           await pendingRef.set({ sent: true, sentAt: FieldValue.serverTimestamp() }, { merge: true });
           console.log(`[autoImportCsv] Reports sent for ${todayKey}`);
         } catch (emailErr) {
-          console.error('Auto-import: failed to send reports:', emailErr);
+          console.error('[autoImportCsv] Email error:', emailErr);
         }
       } else {
-        console.log(`[autoImportCsv] Emails already sent today (${todayKey}) — skipping.`);
+        console.log(`[autoImportCsv] Emails already sent today — skipping`);
       }
 
-      console.log(`[autoImportCsv] Background import complete — ${result.rowCount} rows`);
+      res.status(202).json({ success: true, message: 'Import complete', rowCount: result.rowCount });
     } catch (err) {
-      console.error('Auto-import background error:', err);
+      console.error('[autoImportCsv] Import error:', err);
+      res.status(500).json({ error: err.message });
     }
   }
 );
